@@ -33,6 +33,7 @@ import { backgroundRoute, runBackgroundReview, skillNames, turnTranscript } from
 import { condenseRoute, condenseWithLlm } from './lib/condense.mjs'
 import { readText } from './lib/fsx.mjs'
 import { isTrustedOrigin, sendJson } from './lib/http.mjs'
+import { installNotices } from './lib/notice.mjs'
 import { installReview, installSkillNudge, reviewDue, usageRows } from './lib/review.mjs'
 import { applyConsolidation, consolidateSkills, consolidationRoute, curatorDue, loadSkillState, runSkillCurator, saveSkillState, scanSkills, DEFAULT_INTERVAL_HOURS, DEFAULT_MIN_IDLE_HOURS } from './lib/skillcurator.mjs'
 import { discoverSkills } from './lib/skillcurator.mjs'
@@ -84,6 +85,7 @@ export const Config = Schema.object({
   skillCuratorProvider: Schema.string().description('Provider for the opt-in consolidation pass; falls back to condenseProvider, then to the session route.'),
   skillCuratorModel: Schema.string().description('Model for the opt-in consolidation pass; falls back to condenseModel, then to the session route.'),
   skillCuratorConsolidate: Schema.boolean().default(false).description('Hermes parity, OFF by default: the scheduled pass also asks the model to fold overlapping managed skills into one umbrella. Needs condenseProvider/condenseModel.'),
+  notificationMode: Schema.string().default('on').description('Chat-visible summary of what the automatic passes changed: on (generic lines), verbose (with action detail), off.'),
   skillNudgeEveryTurns: Schema.number().default(10).description('Every N user turns, add one step-local notice asking whether this session produced a reusable procedure worth a skill. 0 disables it.'),
   memoryEnabled: Schema.boolean().default(true).description('Expose the memory target.'),
   userProfileEnabled: Schema.boolean().default(true).description('Expose the user target.'),
@@ -333,6 +335,9 @@ export function apply(ctx, config = {}) {
   if (config.backgroundReview === true && memoryTargets.includes('memory')) {
     installBackgroundReview(ctx, rt)
   }
+  // Hermes' notification_mode: the automatic passes queue a line and this
+  // delivers it at the next turn, so a write is never silent.
+  installNotices(ctx, rt)
   if (config.skillsEnabled !== false) {
     // Hermes' separate skill nudge: its own interval, its own notice, so skills
     // can be reminded at a cadence independent of the memory review.
@@ -434,6 +439,7 @@ async function health(rt) {
         }
       : false,
     skillNudge: { everyTurns: rt.config.skillNudgeEveryTurns ?? 10 },
+    notifications: { mode: String(rt.config.notificationMode ?? 'on').toLowerCase() },
     dataDir: rt.paths.dataDir,
   }
 }

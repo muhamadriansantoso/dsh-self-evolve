@@ -1093,6 +1093,38 @@ test('skill curator: consolidation folds a cluster into an umbrella and archives
   assert.equal((await consolidateSkills(rt, {})).success, false, 'without a route consolidation refuses')
 })
 
+test('notice: applied operations become Hermes-style lines, and delivery happens once at step one', async () => {
+  assert.deepEqual(describeApplied([{ target: 'memory', result: { action: 'add' } }]), ['Memory updated'])
+  assert.deepEqual(describeApplied([{ target: 'memory', result: { action: 'add' } }, { target: 'memory', result: { action: 'patch' } }]), ['Memory updated (2 entries)'])
+  assert.deepEqual(describeApplied([{ target: 'memory', result: { action: 'add' } }], 'verbose'), ['memory add'])
+  assert.deepEqual(describeApplied([{ target: 'skills', result: { action: 'create', name: 'x-skill' } }]), ['Skill create: x-skill'])
+
+  const rt = makeRt({ memoryFile: path.join(HOME, 'notice', 'MEMORY.md'), dataDir: path.join(HOME, 'notice-data') })
+  await queueNotice(rt, 'Memory updated')
+  await queueNotice(rt, 'Skill create: x-skill')
+  const pending = await drainNotices(rt)
+  assert.equal(pending.length, 2)
+  assert.match(noticeText(pending), /^Self-evolve changed something since the last turn:\n- Memory updated\n- Skill create: x-skill$/)
+
+  await queueNotice(rt, 'Memory updated')
+  const handler = preStep((() => {
+    const ctx = fakeCtx()
+    installNotices(ctx, rt)
+    return ctx
+  })())
+  const session = { id: 'n-1', header: {} }
+  let decision = await preStepCall(handler, { turn: 1, session })
+  const delivered = decision.messages.filter(message => message?.source?.kind === NOTICE_KIND)
+  assert.equal(delivered.length, 1, 'the notice is visible in the transcript')
+  assert.match(delivered[0].content[0].text, /Memory updated/)
+  decision = await preStepCall(handler, { turn: 2, session })
+  assert.equal(decision.messages.filter(message => message?.source?.kind === NOTICE_KIND).length, 0, 'nothing is delivered twice')
+  decision = await preStepCall(handler, { turn: 3, step: 2, session })
+  assert.equal(decision.messages.filter(message => message?.source?.kind === NOTICE_KIND).length, 0, 'only the first step of a turn')
+  assert.equal(installNotices(fakeCtx(), { ...rt, config: { ...rt.config, notificationMode: 'off' } }), false, 'off registers nothing')
+  assert.equal(await readFile(noticesPath(rt), 'utf8').then(text => text.trim()), '[]', 'the queue is cleared after delivery')
+})
+
 test('skill nudge: its own interval, its own notice kind, silent on subagents and empty turns', () => {
   const handler = preStep((() => {
     const ctx = fakeCtx()
@@ -1286,7 +1318,8 @@ test('background: the transcript keeps user and assistant text only, bounded at 
 })
 
 test('background: a guarded memory add lands through the real write path while a delete in the same answer is refused', async () => {
-  const rt = makeRt({ memoryFile: path.join(HOME, 'bg', 'MEMORY.md') })
+  const rt = makeRt({ memoryFile: path.join(HOME, 'bg', 'MEMORY.md'), dataDir: path.join(HOME, 'bg-data') })
+  await drainNotices(rt)
   await mkdir(path.dirname(rt.paths.memoryFile), { recursive: true })
   await writeFile(rt.paths.memoryFile, 'Seed entry about ports.')
   const session = {
@@ -1315,6 +1348,9 @@ test('background: a guarded memory add lands through the real write path while a
   assert.ok(written.includes('Seed entry about ports.'), 'the remove op was refused, not applied')
   assert.equal(calls.length, 1)
   assert.equal(calls[0].provider, 'nine-router')
+  const queued = await drainNotices(rt)
+  assert.deepEqual(queued.map(item => item.text), ['Memory updated'], 'the pass leaves a human-facing line')
+  assert.deepEqual(await drainNotices(rt), [], 'draining is one-shot')
   assert.equal(calls[0].model, 'FreeModel')
   assert.equal(calls[0].reasoningEffort, 'low')
   assert.equal(calls[0].sessionId, 'bg-1')
@@ -1395,6 +1431,7 @@ const { backgroundInstruction, backgroundRoute, parsePlan, runBackgroundReview, 
 const { archiveBlock, buckets, curatorStatePath, entryKey, runCurator, saveState, setPin, syncState } = await import('../lib/curator.mjs')
 
 const { applyConsolidation, consolidateSkills, curatorDue, discoverSkills, loadSkillState, runSkillCurator, saveSkillState, scanSkills, setSkillPin, setSkillPaused, skillStatePath } = await import('../lib/skillcurator.mjs')
+const { NOTICE_KIND, describeApplied, drainNotices, installNotices, noticeText, noticesPath, queueNotice } = await import('../lib/notice.mjs')
 
 /** A plugin context that records the listeners the plugin registers. */
 function fakeCtx() {

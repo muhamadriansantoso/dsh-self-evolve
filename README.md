@@ -166,6 +166,23 @@ Every write first saves a snapshot of the previous content under
 the installation (`$DSH_INSTALL_DIR`, `node_modules`, `.system`) are read-only:
 edits there would be lost on upgrade.
 
+## Notifications
+
+Hermes reports what a background pass changed into the chat
+(`notification_mode`: `off` / `on` / `verbose`). DSH has no system-notice
+channel, but a step-local message *is* rendered in the transcript — the same
+mechanism the memory review and the skill nudge already use — so every
+automatic write queues one line and the next turn's first step delivers it:
+
+- `Memory updated`, `Skill create: <name>` — what the background review applied
+- `Memory curator: archived N stale entries (recoverable)`
+- `Skill curator: N marked stale, M archived (report <date>.md)`
+
+`notificationMode: on` (default) is generic, `verbose` names the memory action,
+`off` registers no listener at all. The queue lives in
+`<dataDir>/notices.json`, keeps at most 20 lines, and is cleared as it is
+delivered, so a pass that ran while you were away is still reported once.
+
 ## Where a change takes effect
 
 - Persona / soul / user block — `dsh-agent-instructions` re-probes `~/.dsh/AGENTS.md`
@@ -199,6 +216,7 @@ own command or leave it off.
 | `autoCondense` | `true` | shorten an over-limit store with the model, then apply the batch, instead of rejecting the add |
 | `condenseProvider` / `condenseModel` | session's model | provider route and model of the condensation calls; set both to pin them |
 | `condenseTimeoutMs` | `120000` | time budget of one whole condensation |
+| `notificationMode` | `on` | chat-visible summary of automatic writes: `on`, `verbose` (with the memory action), `off` |
 | `reviewEveryTurns` | `10` | periodic memory review: the notice repeats every N user turns, 0 = off |
 | `reviewFillShare` | `0.85` | store usage share (0..1) from which the review speaks |
 | `backgroundReview` | `false` | post-turn learning pass: derive the turn, ask the model for guarded memory/skill operations, apply them through the same write paths |
