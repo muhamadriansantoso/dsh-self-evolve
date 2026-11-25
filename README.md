@@ -78,17 +78,29 @@ touched. `{ "action": "curate" }` forces one pass now. This is Hermes'
 `curator.py` reduced to its deterministic half: no model call, no consolidation
 fork, and archive instead of delete.
 
-**Skill curator.** The same policy for skills: an unpinned skill whose
-`SKILL.md` has not changed for `curatorStaleDays` (14) is a candidate, and
-`curatorDeepDays` (30) sends it to the deep archive. Nothing is deleted — the
-skill directory (or flat `.md`) is **moved** into
-`~/.dsh/self-evolve/archive/skills/<date>/<name>` and named in that tree's
-`INDEX.md`, so a restore is a single move back. Because the skill hub is
-shared, an archived skill also disappears from Hermes there: that is why the
-automatic pass only starts above `skillCuratorMaxSkills` (0 = never) while
-`skill_manage { "action": "curate" }` runs it now and
-`{ "action": "scan" }` shows what it would take; `pin` / `unpin` (with `name`)
-keep a skill out of it.
+**Skill curator.** The same policy for skills, on Hermes' schedule:
+
+- **Only curator-managed skills are candidates.** A skill becomes managed the
+  moment `skill_manage` creates or edits it; the rest of the shared hub is
+  reported by `scan` as `unmanaged_ignored` and never touched.
+- **Inactivity-triggered, no cron.** A run is observed at the start of a turn
+  when the last one is older than `skillCuratorIntervalHours` (168 h) and the
+  agent has been idle for `skillCuratorMinIdleHours` (2 h). The first
+  observation only seeds the clock, so an install never mutates the library on
+  its first tick; `pause` / `resume` (alone) stop and restart it.
+- **Never delete, only archive.** An unpinned skill unchanged for
+  `curatorStaleDays` (14) is **moved** into
+  `~/.dsh/self-evolve/archive/skills/<date>/` and named in that tree's
+  `INDEX.md`; `curatorDeepDays` (30) sends it to `deep-<name>`. A restore is one
+  move back. One run archives at most `skillCuratorBatch` (10).
+- **Consolidation is opt-in** (`skillCuratorConsolidate: false`): the scheduled
+  pass asks the configured `condenseProvider`/`condenseModel` to fold
+  overlapping managed skills into one umbrella, then archives the sources. The
+  `consolidate` action runs it on demand.
+
+`skill_manage { "action": "scan" }` shows what would go without changing
+anything (`skillCuratorScanLimit`, 20 rows, total always reported); `pin` /
+`unpin` (with `name`) keep a skill out of every pass.
 
 **Skill nudge.** Hermes keeps a separate `skills.creation_nudge_interval`;
 here `skillNudgeEveryTurns` (10) adds one step-local notice on the first step of
@@ -148,8 +160,12 @@ last output line is reported in the tool result as `mirror.summary`.
 | `curatorDeepDays` | `30` | age after which it goes to the deep archive |
 | `curatorTriggerShare` | `0.9` | store usage share below which the automatic pass archives nothing; `curate` ignores it |
 | `skillCurator` | `false` | skill archiving: move an unchanged, unpinned skill into the archive tree (never delete) |
-| `skillCuratorMaxSkills` | `0` | automatic skill archiving starts above this many skills; `0` = only the explicit `curate` action |
+| `skillCuratorMaxSkills` | `0` | ceiling for the scheduled pass: it runs only while the managed library is larger; `0` = no ceiling |
+| `skillCuratorIntervalHours` | `168` | hours between scheduled runs (Hermes default: 7 days) |
+| `skillCuratorMinIdleHours` | `2` | idle hours the agent needs before a scheduled run happens |
+| `skillCuratorScanLimit` | `20` | rows the `scan` action returns; the total is always reported |
 | `skillCuratorBatch` | `10` | most skills one run may archive, so a single call never sweeps the library |
+| `skillCuratorConsolidate` | `false` | opt-in LLM consolidation: fold overlapping managed skills into one umbrella, archive the sources |
 | `skillNudgeEveryTurns` | `10` | every N user turns, one notice asking whether a reusable procedure belongs in a skill |
 | `memoryEnabled`, `userProfileEnabled`, `skillsEnabled`, `personaEnabled` | `true` | tool / target switches |
 | `skillsProjectDir` | `.agents/skills` | where `scope: project` creates skills |

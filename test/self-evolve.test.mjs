@@ -392,7 +392,7 @@ test('tool definitions compile against the installed @deepseek-ai/dsh-tools and 
 
   assert.equal(memory.name, 'memory')
   assert.deepEqual(memory.parameters.required, ['target', 'operations'])
-  assert.equal(skill.parameters.properties.operations.items.oneOf.length, 11, 'create, patch, edit, write_file, remove_file, delete, view, pin, unpin, curate, scan')
+  assert.equal(skill.parameters.properties.operations.items.oneOf.length, 14, 'create, patch, edit, write_file, remove_file, delete, view, pin, unpin, curate, scan, pause, resume, consolidate')
 
   await assert.rejects(memory.execute({ operations: [{ action: 'add', content: 'x' }] }, fakeExec), error => error.code === 'INVALID_ARGS')
   assert.equal((await memory.execute({ target: 'memory', operations: [] }, fakeExec)).success, false, 'an empty batch is refused')
@@ -949,7 +949,7 @@ function isolatedRt(tag, config = {}) {
 }
 
 /** Create a skill directory with a backdated SKILL.md. */
-async function seedSkill(rt, name, { ageDays = 0, pinned = false } = {}) {
+async function seedSkill(rt, name, { ageDays = 0, pinned = false, managed = false } = {}) {
   const dir = path.join(rt.paths.skillsDir, name)
   await mkdir(dir, { recursive: true })
   const file = path.join(dir, 'SKILL.md')
@@ -958,16 +958,26 @@ async function seedSkill(rt, name, { ageDays = 0, pinned = false } = {}) {
     const when = new Date(Date.now() - ageDays * DAY)
     await utimes(file, when, when)
   }
+  if (managed) {
+    const state = await loadSkillState(rt)
+    const stamp = new Date().toISOString()
+    state.entries[name] = { managed: true, first: stamp, last: stamp }
+    await saveSkillState(rt, state)
+  }
   if (pinned) await setSkillPin(rt, { name, pinned: true })
   return dir
 }
 
-test('skill curator: a stale skill is moved into the archive, never deleted, and an edited one starts over', async () => {
+test('skill curator: only managed skills are candidates, archiving moves and never deletes', async () => {
   const rt = isolatedRt('skills-a', { skillCurator: true })
-  const stale = await seedSkill(rt, 'old-skill', { ageDays: 20 })
-  const fresh = await seedSkill(rt, 'new-skill')
+  const stale = await seedSkill(rt, 'old-skill', { ageDays: 20, managed: true })
+  const fresh = await seedSkill(rt, 'new-skill', { managed: true })
+  const foreign = await seedSkill(rt, 'reference-skill', { ageDays: 90 })
+
   const scan = await scanSkills(rt)
-  assert.equal(scan.total, 2)
+  assert.equal(scan.scanned, 3)
+  assert.equal(scan.managed, 2, 'a skill the agent never wrote is not managed')
+  assert.equal(scan.unmanaged_ignored, 1, 'the shared hub is reported, never touched')
   assert.deepEqual(scan.stale.map(row => row.name), ['old-skill'])
 
   const report = await runSkillCurator(rt, { force: true })
@@ -976,21 +986,27 @@ test('skill curator: a stale skill is moved into the archive, never deleted, and
   assert.equal(report.archived[0].name, 'old-skill')
   await assert.rejects(readFile(path.join(stale, 'SKILL.md')), 'the skill left its root')
   assert.ok((await readFile(path.join(fresh, 'SKILL.md'), 'utf8')).includes('new-skill'), 'the fresh skill stayed')
+  assert.ok((await readFile(path.join(foreign, 'SKILL.md'), 'utf8')).includes('reference-skill'), 'the unmanaged skill is untouched even at 90 days')
   const archived = await readFile(path.join(report.archive, 'old-skill', 'SKILL.md'), 'utf8')
   assert.match(archived, /name: old-skill/, 'the file is recoverable in the archive')
-  const manifest = await readFile(report.manifest, 'utf8')
-  assert.match(manifest, /stale 20d · old-skill/)
-  assert.equal((await discoverSkills(rt)).length, 1)
+  assert.match(await readFile(report.manifest, 'utf8'), /stale 20d · old-skill/)
+  assert.equal((await discoverSkills(rt)).length, 2)
+
+  // Editing a managed skill resets its clock.
+  const when = new Date()
+  await utimes(path.join(fresh, 'SKILL.md'), when, when)
+  const again = await runSkillCurator(rt, { force: true })
+  assert.equal(again.reason, 'nothing_stale')
 })
 
-test('skill curator: pin bypasses archiving, unpin releases it, and scan changes nothing', async () => {
+test('skill curator: pin bypasses archiving, unpin releases it, scan changes nothing', async () => {
   const rt = isolatedRt('skills-b', { skillCurator: true })
-  await seedSkill(rt, 'kept-skill', { ageDays: 40, pinned: true })
-  await seedSkill(rt, 'other-skill', { ageDays: 1 })
+  await seedSkill(rt, 'kept-skill', { ageDays: 40, managed: true, pinned: true })
+  await seedSkill(rt, 'other-skill', { ageDays: 1, managed: true })
 
   const scan = await scanSkills(rt)
   assert.deepEqual(scan.stale, [], 'the pinned skill is not a candidate')
-  assert.deepEqual(scan.pinned.map(row => row.name), ['kept-skill'])
+  assert.deepEqual(scan.pinned, ['kept-skill'])
   assert.equal((await discoverSkills(rt)).length, 2, 'scan is read-only')
 
   const first = await runSkillCurator(rt, { force: true })
@@ -1003,21 +1019,63 @@ test('skill curator: pin bypasses archiving, unpin releases it, and scan changes
   assert.match(second.archived[0].to, /deep-kept-skill/)
 })
 
-test('skill curator: the automatic pass stays off below the ceiling and the explicit curate forces it', async () => {
-  const rt = isolatedRt('skills-c', { skillCurator: true, skillCuratorMaxSkills: 5 })
-  await seedSkill(rt, 'lonely-skill', { ageDays: 30 })
-  const calm = await runSkillCurator(rt, {})
-  assert.equal(calm.reason, 'under_ceiling')
-  assert.equal(calm.archived.length, 0)
-  assert.equal((await discoverSkills(rt)).length, 1)
+test('skill curator: the scheduler seeds one interval, honours idle and pause, and one run is capped', async () => {
+  const now = CURATOR_NOW
+  assert.deepEqual(curatorDue({ state: { last_run_at: null }, now }), { due: false, reason: 'not_seeded', seed: true }, 'a fresh state only seeds')
+  assert.equal(curatorDue({ state: { last_run_at: new Date(now - 8 * DAY).toISOString() }, now, lastActivity: now - 3 * 3600000 }).due, true, 'a week plus three idle hours is due')
+  assert.equal(curatorDue({ state: { last_run_at: new Date(now - 8 * DAY).toISOString() }, now }).reason, 'idle', 'an active session waits for the idle window')
+  assert.equal(curatorDue({ state: { last_run_at: new Date(now - DAY).toISOString() }, now, lastActivity: 0 }).reason, 'interval', 'inside the interval nothing runs')
+  assert.equal(curatorDue({ state: { last_run_at: null, paused: true }, now }).reason, 'paused', 'paused wins over everything')
 
-  const forced = await runSkills(rt, HOME, [{ action: 'curate' }])
-  assert.equal(forced.success, true)
-  assert.equal(forced.archived.length, 1)
-  assert.equal(forced.capped, false, 'one candidate needs no capping')
-  assert.equal(forced.batch, 10, 'a run is bounded by skillCuratorBatch')
+  const rt = isolatedRt('skills-c', { skillCurator: true, skillCuratorBatch: 2, skillCuratorScanLimit: 1 })
+  for (const name of ['a-skill', 'b-skill', 'c-skill']) await seedSkill(rt, name, { ageDays: 30, managed: true })
+
+  const paused = await runSkills(rt, HOME, [{ action: 'pause' }])
+  assert.equal(paused.success, true)
+  assert.equal(paused.paused, true)
+  assert.equal((await loadSkillState(rt)).paused, true)
+  assert.equal((await runSkills(rt, HOME, [{ action: 'resume' }])).paused, false)
+
+  const scan = await scanSkills(rt)
+  assert.equal(scan.stale_total, 3, 'the total is always reported')
+  assert.equal(scan.stale.length, 1, 'rows are limited by skillCuratorScanLimit')
+
+  const run = await runSkills(rt, HOME, [{ action: 'curate' }])
+  assert.equal(run.success, true)
+  assert.equal(run.archived.length, 2, 'one run never exceeds skillCuratorBatch')
+  assert.equal(run.capped, true)
+  assert.equal(run.remaining_candidates, 1)
+
+  await setSkillPaused(rt, true)
+  const stillRuns = await runSkills(rt, HOME, [{ action: 'curate' }])
+  assert.equal(stillRuns.archived.length, 1, 'an explicit curate overrides a pause, like Hermes run')
+
   const off = await runSkills(makeRt(), HOME, [{ action: 'curate' }])
   assert.equal(off.success, false, 'a disabled skill curator refuses instead of archiving')
+})
+
+test('skill curator: consolidation folds a cluster into an umbrella and archives the sources', async () => {
+  const rt = isolatedRt('skills-d', { skillCurator: true, condenseProvider: 'p', condenseModel: 'm' })
+  await seedSkill(rt, 'deploy-a', { managed: true })
+  await seedSkill(rt, 'deploy-b', { managed: true })
+
+  const content = '---\nname: deploy\ndescription: Use when deploying either target.\n---\n\nSteps for both.\n'
+  const llm = { stream: () => modelStream(`<plan>${JSON.stringify({ name: 'deploy', description: 'Use when deploying.', content })}</plan>`) }
+  const proposals = await consolidateSkills(rt, { llm, route: { provider: 'p', model: 'm' } })
+  assert.equal(proposals.success, true)
+  assert.equal(proposals.consolidated.length, 1)
+  assert.deepEqual(proposals.consolidated[0].sources.sort(), ['deploy-a', 'deploy-b'])
+
+  const applied = await applyConsolidation(rt, { ...proposals.consolidated[0], cwd: HOME })
+  assert.equal(applied.success, true)
+  const names = (await discoverSkills(rt)).map(skill => skill.name).sort()
+  assert.ok(names.includes('deploy'), 'the umbrella exists')
+  assert.ok(!names.includes('deploy-a') && !names.includes('deploy-b'), 'the sources left the root')
+  assert.ok(names.includes('deploy-a') === false)
+
+  const none = await consolidateSkills(rt, { llm, route: { provider: 'p', model: 'm' } })
+  assert.equal(none.reason, 'no_clusters')
+  assert.equal((await consolidateSkills(rt, {})).success, false, 'without a route consolidation refuses')
 })
 
 test('skill nudge: its own interval, its own notice kind, silent on subagents and empty turns', () => {
@@ -1321,7 +1379,7 @@ const { backgroundInstruction, backgroundRoute, parsePlan, runBackgroundReview, 
 
 const { archiveBlock, buckets, curatorStatePath, entryKey, runCurator, saveState, setPin, syncState } = await import('../lib/curator.mjs')
 
-const { discoverSkills, runSkillCurator, scanSkills, setSkillPin, skillStatePath } = await import('../lib/skillcurator.mjs')
+const { applyConsolidation, consolidateSkills, curatorDue, discoverSkills, loadSkillState, runSkillCurator, saveSkillState, scanSkills, setSkillPin, setSkillPaused, skillStatePath } = await import('../lib/skillcurator.mjs')
 
 /** A plugin context that records the listeners the plugin registers. */
 function fakeCtx() {

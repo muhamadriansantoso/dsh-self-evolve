@@ -34,6 +34,7 @@ import { condenseRoute, condenseWithLlm } from './lib/condense.mjs'
 import { readText } from './lib/fsx.mjs'
 import { isTrustedOrigin, sendJson } from './lib/http.mjs'
 import { installReview, installSkillNudge, reviewDue, usageRows } from './lib/review.mjs'
+import { applyConsolidation, consolidateSkills, curatorDue, loadSkillState, runSkillCurator, saveSkillState, scanSkills, DEFAULT_INTERVAL_HOURS, DEFAULT_MIN_IDLE_HOURS } from './lib/skillcurator.mjs'
 import { discoverSkills } from './lib/skillcurator.mjs'
 import { skillRoots } from './lib/skills.mjs'
 import { resolvePaths, resolveStores } from './lib/stores.mjs'
@@ -75,8 +76,12 @@ export const Config = Schema.object({
   curatorDeepDays: Schema.number().default(30).description('Age in days after which an entry goes to the deep archive instead.'),
   curatorTriggerShare: Schema.number().default(0.9).description('Store usage share (0..1) below which the automatic pass only records state and archives nothing. The memory action `curate` ignores it.'),
   skillCurator: Schema.boolean().default(false).description('Skill archiving: an unpinned skill whose SKILL.md has not changed for curatorStaleDays can be moved into the archive tree by `skill_manage {action:"curate"}`. Skills are never deleted.'),
-  skillCuratorMaxSkills: Schema.number().default(0).description('Automatic skill archiving only starts above this many skills. 0 disables the automatic pass; the explicit `curate` action always runs.'),
+  skillCuratorMaxSkills: Schema.number().default(0).description('Ceiling for the scheduled pass: it only runs while the managed library is larger than this. 0 = no ceiling. Only curator-managed skills are ever touched either way.'),
   skillCuratorBatch: Schema.number().default(10).description('Most skills one curator run may archive, so a single call never sweeps the library.'),
+  skillCuratorIntervalHours: Schema.number().default(168).description('Hermes parity: a scheduled run waits this many hours between runs (default 7 days).'),
+  skillCuratorMinIdleHours: Schema.number().default(2).description('Hermes parity: a scheduled run waits until the agent has been idle this many hours.'),
+  skillCuratorScanLimit: Schema.number().default(20).description('Rows `skill_manage {action:"scan"}` returns; the total is always reported.'),
+  skillCuratorConsolidate: Schema.boolean().default(false).description('Hermes parity, OFF by default: the scheduled pass also asks the model to fold overlapping managed skills into one umbrella. Needs condenseProvider/condenseModel.'),
   skillNudgeEveryTurns: Schema.number().default(10).description('Every N user turns, add one step-local notice asking whether this session produced a reusable procedure worth a skill. 0 disables it.'),
   memoryEnabled: Schema.boolean().default(true).description('Expose the memory target.'),
   userProfileEnabled: Schema.boolean().default(true).description('Expose the user target.'),
@@ -237,6 +242,67 @@ function installBackgroundReview(ctx, rt) {
 }
 
 /**
+ * The skill curator on a schedule, the way Hermes runs it: no cron daemon, no
+ * wake — the pass is observed at the start of a turn, after the agent has been
+ * idle long enough, at most once per `skillCuratorIntervalHours`. The first
+ * observation only seeds `last_run_at`, so an install never mutates the library
+ * on its first tick. A run is bounded by `skillCuratorBatch` and can only touch
+ * curator-managed, unpinned skills.
+ * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
+ * @param {ReturnType<typeof createRuntime>} rt - runtime.
+ * @returns {boolean} whether a listener was registered.
+ */
+function installSkillCuratorScheduler(ctx, rt) {
+  const intervalHours = rt.config.skillCuratorIntervalHours ?? DEFAULT_INTERVAL_HOURS
+  const minIdleHours = rt.config.skillCuratorMinIdleHours ?? DEFAULT_MIN_IDLE_HOURS
+  let lastActivity = undefined
+  let running = false
+  ctx.on('session/event', (session, event) => {
+    if (event?.type === 'turn/end' && (session.header?.delegationDepth ?? 0) === 0) lastActivity = Date.now()
+  })
+  ctx.on('agent/pre-step', async (session, next) => {
+    const decision = await next()
+    const step = session?.header?.step ?? 1
+    if (step !== 1 || running || (session.header?.delegationDepth ?? 0) > 0) return decision
+    if (Array.isArray(decision?.messages) && decision.messages.length === 0) return decision
+    const now = Date.now()
+    const state = await loadSkillState(rt)
+    if (state.paused === true) return decision
+    const due = curatorDue({ state, now, lastActivity, intervalHours, minIdleHours })
+    if (due.seed === true) {
+      state.last_run_at = new Date(now).toISOString()
+      await saveSkillState(rt, state).catch(() => {})
+      return decision
+    }
+    if (!due.due) return decision
+    // Fire and forget: the user's turn is never delayed by curation.
+    running = true
+    const cwd = session.header?.cwd ?? process.cwd()
+    void (async () => {
+      try {
+        if (rt.config.skillCuratorMaxSkills > 0) {
+          const scan = await scanSkills(rt, { cwd })
+          if (scan.managed <= rt.config.skillCuratorMaxSkills) return
+        }
+        await runSkillCurator(rt, { cwd, now })
+        if (rt.config.skillCuratorConsolidate === true) {
+          const llm = ctx.get('llm')
+          const route = { provider: rt.config.condenseProvider, model: rt.config.condenseModel }
+          const proposals = await consolidateSkills(rt, { llm, route, cwd })
+          for (const proposal of proposals.consolidated ?? []) await applyConsolidation(rt, { ...proposal, cwd })
+        }
+      } catch {
+        // A failed scheduled pass must never surface in the user's turn.
+      } finally {
+        running = false
+      }
+    })()
+    return decision
+  })
+  return true
+}
+
+/**
  * Plugin entry.
  * @param {import('@deepseek-ai/cordis').Context} ctx - plugin context.
  * @param {Record<string, any>} config - validated config.
@@ -273,7 +339,9 @@ export function apply(ctx, config = {}) {
     ctx.tools.register(skillTool(defineTool, rt, {
       sessionOf: exec => cwdOf(ctx, exec),
       catalogLookup: (exec, cwd) => catalogLookup(ctx, exec, cwd),
+      curatorLlm: () => ctx.get('llm'),
     }))
+    if (config.skillCurator === true) installSkillCuratorScheduler(ctx, rt)
   }
   if (config.personaEnabled !== false) {
     // The soul block exists only in a marker-managed AGENTS.md; offer that
@@ -333,6 +401,7 @@ async function health(rt) {
       ...(store.charLimit === undefined ? {} : { charLimit: store.charLimit }),
     }
   }
+  const skillState = await loadSkillState(rt)
   return {
     ok: true,
     plugin: name,
@@ -342,7 +411,20 @@ async function health(rt) {
     review: { everyTurns: rt.config.reviewEveryTurns ?? 10, fillShare: rt.config.reviewFillShare ?? 0.85 },
     backgroundReview: rt.config.backgroundReview === true ? { everyTurns: rt.config.backgroundEveryTurns ?? 3, timeoutMs: rt.config.backgroundTimeoutMs ?? 30000 } : false,
     curator: rt.config.curator === true ? { staleDays: rt.config.curatorStaleDays ?? 14, deepDays: rt.config.curatorDeepDays ?? 30, triggerShare: rt.config.curatorTriggerShare ?? 0.9 } : false,
-    skillCurator: rt.config.skillCurator === true ? { staleDays: rt.config.curatorStaleDays ?? 14, maxSkills: rt.config.skillCuratorMaxSkills ?? 0, batch: rt.config.skillCuratorBatch ?? 10 } : false,
+    skillCurator: rt.config.skillCurator === true
+      ? {
+          staleDays: rt.config.curatorStaleDays ?? 14,
+          deepDays: rt.config.curatorDeepDays ?? 30,
+          batch: rt.config.skillCuratorBatch ?? 10,
+          intervalHours: rt.config.skillCuratorIntervalHours ?? DEFAULT_INTERVAL_HOURS,
+          minIdleHours: rt.config.skillCuratorMinIdleHours ?? DEFAULT_MIN_IDLE_HOURS,
+          consolidate: rt.config.skillCuratorConsolidate === true,
+          paused: skillState.paused === true,
+          lastRunAt: skillState.last_run_at,
+          runCount: skillState.run_count ?? 0,
+          managed: Object.keys(skillState.entries).length,
+        }
+      : false,
     skillNudge: { everyTurns: rt.config.skillNudgeEveryTurns ?? 10 },
     dataDir: rt.paths.dataDir,
   }
