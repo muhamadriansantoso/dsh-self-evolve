@@ -1,0 +1,58 @@
+{
+  "name": "dsh-self-evolve",
+  "version": "0.1.0",
+  "description": "Hermes-style self-editing for DeepSeek Harness: memory, persona_update and skill_manage tools that write MEMORY.md, the persona/soul/user blocks of AGENTS.md, and skills in every scanned root.",
+  "author": "Muhamad Rian Santoso <rian_santoso@ymail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muhamadriansantoso/dsh-self-evolve.git"
+  },
+  "homepage": "https://github.com/muhamadriansantoso/dsh-self-evolve#readme",
+  "bugs": {
+    "url": "https://github.com/muhamadriansantoso/dsh-self-evolve/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis-plugin",
+    "self-evolving-agent",
+    "memory",
+    "skills"
+  ],
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.mjs",
+    "lib",
+    "cordis.patch.yml",
+    "locale",
+    "icon.svg",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.2-0 <0.3.0-0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": ">=0.2.2-0 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.19.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true }
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

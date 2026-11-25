@@ -1,0 +1,39 @@
+# Loads the self-evolve host plugin: the Hermes-style self-editing tools
+# (memory, persona_update, skill_manage). The host provides @deepseek-ai/dsh-tools
+# and @deepseek-ai/schemastery to profile bundles, so the package declares no
+# dependencies.
+#
+# Config notes:
+#   mirrorCommand — sync-agents.py mirrors ~/.dsh/AGENTS.md + ~/.dsh/MEMORY.md to
+#     Hermes (~/.hermes). The systemd path unit already runs it on change; running
+#     it here makes the tool result report the mirror's verdict immediately.
+#   promptNote — one system-prompt sentence that supersedes the AGENTS.md memory
+#     protocol's "use edit_file/write_file" wording with the memory tool.
+#   autoCondense — on by default: a batch that would exceed a store's char
+#     limit first shortens the store's biggest entries through the host LLM
+#     service (the calling session's own model) and then applies the batch;
+#     off = the plain over-budget rejection. See also condenseProvider,
+#     condenseModel and condenseTimeoutMs in the README.
+#   reviewEveryTurns / reviewFillShare — the periodic memory review: a store at
+#     or above the fill share is handed to the session with its usage on its
+#     first turn, then at most once every N turns, so it curates before a write
+#     overflows. 0 turns it off.
+#   backgroundReview — post-turn learning pass: after a completed user turn,
+#     the host model is asked for a small JSON list of memory add/patch and
+#     skill create/edit operations, validated and applied through the same
+#     write paths. It cannot delete, wake the session, or edit the transcript;
+#     a failed call changes nothing. backgroundEveryTurns bounds the
+#     frequency, backgroundTimeoutMs the one model call.
+- insert:
+    - id: self-evolve
+      name: dsh-self-evolve
+      config:
+        mirrorCommand: ['~/.agent-shared/sync-agents.py']
+        backgroundReview: true
+        backgroundEveryTurns: 3
+        backgroundTimeoutMs: 30000
+        promptNote: >-
+          Self-editing: keep durable facts in the `memory` stores, recurring
+          procedures in skills (`skill_manage`) and standing behaviour preferences
+          in the persona (`persona_update`) — update them with those tools rather
+          than by editing MEMORY.md or AGENTS.md directly.

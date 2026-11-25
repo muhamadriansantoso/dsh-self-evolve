@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Self-evolve: memori, skill, dan persona",
+    "description": "Memungkinkan agen memperbarui konteks persistennya sendiri seperti Hermes Agent, lewat tiga tool yang dipanggil saat chat: `memory` menambah, menambal, atau menghapus entri MEMORY.md dan blok profil pengguna; `persona_update` melihat, menulis ulang, atau menyunting per bagian teks persona dan soul di file instruksi AGENTS.md; `skill_manage` membuat, menambal, menyunting, atau menghapus skill di semua direktori skill yang dipindai sesi, dengan trash yang bisa dipulihkan. Setiap penulisan menyimpan snapshot di ~/.dsh/self-evolve/history, batch bersifat atomik, dan skill di dalam instalasi tetap read-only. Store yang akan melewati batas karakternya lebih dulu diringkas lewat layanan LLM Harness, entri terbesarnya ditulis ulang satu per satu sampai batch muat, baru ditulis; bila peringkasan gagal, store tidak disentuh dan penambahannya ditolak. Tiap beberapa turn pengguna, store yang mendekati batasnya dikembalikan ke sesi bersama pemakaian terkini, supaya agen merapikannya sebelum ada tulisan yang meluap. Saat plugin mati tool-nya hilang dan file tetap seperti adanya. Status: GET /api/self-evolve/health."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Self-evolve: memory, skills and persona",
+    "description": "Lets the agent update its own persistent context the way Hermes Agent does, through three tools it calls during a chat: `memory` adds, patches or removes entries of MEMORY.md and the user-profile block; `persona_update` views, rewrites or section-edits the persona and soul text of the AGENTS.md instruction file; `skill_manage` creates, patches, edits or deletes skills in every skill directory the session scans, with a recoverable trash. Every write keeps a snapshot under ~/.dsh/self-evolve/history, batches are atomic, and skills inside the installation stay read-only. A store that would exceed its character limit is first shortened through the Harness LLM service, its biggest entries rewritten one call at a time until the batch fits, and only then written; a failed condensation leaves the store untouched and rejects the add. Every few user turns a store at or near its limit is handed back to the session with its live usage, so the agent curates it before a write overflows it. When the plugin is off the tools disappear and the files stay as they were. Status: GET /api/self-evolve/health."
+  }
+}

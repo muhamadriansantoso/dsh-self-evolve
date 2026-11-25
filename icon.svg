@@ -1,0 +1,12 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="6" y="7" width="24" height="22" rx="4" fill="url(#self-evolve-card)" fill-opacity="0.9" />
+  <path d="M22.6 12.6A7 7 0 1 0 25 18.4" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" />
+  <path d="M22.9 9.8L22.7 12.8L25.7 13" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M14.6 21.4L15.1 19.1L19.6 14.6L21.9 16.9L17.4 21.4L15.1 21.9Z" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
+  <defs>
+    <linearGradient id="self-evolve-card" x1="18" y1="7" x2="18" y2="29" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#69B9FF" />
+      <stop offset="1" stop-color="#324DE2" />
+    </linearGradient>
+  </defs>
+</svg>
