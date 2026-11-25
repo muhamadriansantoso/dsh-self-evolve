@@ -1329,6 +1329,39 @@ test('background: the turn/end reason is read from data.reason.kind, the shape d
   assert.equal(turnEndReason(undefined), undefined)
 })
 
+test('background: a route that rejects reasoning effort is retried without it', async () => {
+  const rt = makeRt({ memoryFile: path.join(HOME, 'bg-retry', 'MEMORY.md'), dataDir: path.join(HOME, 'bg-retry-data') })
+  await mkdir(path.dirname(rt.paths.memoryFile), { recursive: true })
+  await writeFile(rt.paths.memoryFile, 'Seed.')
+  const calls = []
+  const llm = {
+    stream: options => {
+      calls.push(options)
+      if (calls.length === 1) return modelStream('', { failure: { code: 'UNSUPPORTED_REASONING_EFFORT', message: 'not supported' } })
+      return modelStream('<plan>{"operations":[{"action":"add","content":"Port demo 4567."}]}</plan>')
+    },
+  }
+  const outcome = await runBackgroundReview(rt, {
+    session: {
+      id: 'retry',
+      header: { cwd: HOME },
+      deriveMessages: () => [
+        { role: 'user', content: [{ type: 'text', text: 'Port demo layanan ini 4567.' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'dicatat' }] },
+      ],
+    },
+    transcript: turnTranscript,
+    current: async () => ({ memory: 'Seed.', skills: '(none)' }),
+    llm,
+    route: { provider: 'nine-router', model: 'RianModel' },
+  })
+  assert.equal(outcome.error, undefined, 'the retry hides the unsupported effort')
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].reasoningEffort, 'low')
+  assert.equal(calls[1].reasoningEffort, undefined, 'the retry omits the field entirely')
+  assert.match(await readFile(rt.paths.memoryFile, 'utf8'), /Port demo 4567/)
+})
+
 test('background: a guarded memory add lands through the real write path while a delete in the same answer is refused', async () => {
   const rt = makeRt({ memoryFile: path.join(HOME, 'bg', 'MEMORY.md'), dataDir: path.join(HOME, 'bg-data') })
   await drainNotices(rt)
