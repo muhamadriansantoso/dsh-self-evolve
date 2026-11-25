@@ -930,6 +930,109 @@ test('condense: readStream returns the text and usage the installed BlockAssembl
   }
 })
 
+// --------------------------------------------- curator (archive, never delete)
+
+const DAY = 86400000
+const CURATOR_NOW = Date.parse('2026-11-25T00:00:00Z')
+const older = (text, days) => ({ first: new Date(CURATOR_NOW - days * DAY).toISOString(), seen: new Date(CURATOR_NOW - days * DAY).toISOString() })
+
+/** Seed the memory store and a curator state that already knows its entries. */
+async function seedCurator(rt, entries, ages) {
+  await mkdir(path.dirname(rt.paths.memoryFile), { recursive: true })
+  await writeFile(rt.paths.memoryFile, renderEntries(entries))
+  const state = { version: 1, entries: {} }
+  entries.forEach((text, index) => { state.entries[entryKey(text)] = older(text, ages[index]) })
+  await saveState(curatorStatePath(rt, 'memory'), state)
+}
+
+test('curator: state sync, bucketing and the archive block are pure and age-based', () => {
+  const old = 'Old fact about ports.'
+  const fresh = 'Fresh fact.'
+  const synced = syncState({ version: 1, entries: {} }, [old, fresh], CURATOR_NOW - 20 * DAY)
+  assert.equal(Object.keys(synced.entries).length, 2, 'syncState stamps every entry it has not seen before')
+  const seen = days => ({ first: new Date(CURATOR_NOW - days * DAY).toISOString(), seen: new Date(CURATOR_NOW - days * DAY).toISOString() })
+  const state = { version: 1, entries: { [entryKey(old)]: seen(20), [entryKey(fresh)]: seen(1) } }
+  const split = buckets(state, [old, fresh], { now: CURATOR_NOW, staleDays: 14, deepDays: 30 })
+  assert.deepEqual(split.stale.map(item => item.text), [old], 'an unchanged entry past the stale age is a candidate')
+  assert.deepEqual(split.fresh, [fresh], 'a young entry is untouched')
+  assert.deepEqual(split.deep, [])
+  assert.equal(split.stale[0].age, 20)
+
+  const pinnedState = { version: 1, entries: { ...state.entries } }
+  pinnedState.entries[entryKey(old)].pinned = true
+  const pinned = buckets(pinnedState, [old], { now: CURATOR_NOW, staleDays: 14, deepDays: 30 })
+  assert.deepEqual(pinned.pinned, [old], 'a pin bypasses the age entirely')
+  assert.deepEqual(pinned.stale, [])
+
+  const deep = buckets(syncState({ version: 1, entries: {} }, [old], CURATOR_NOW - 40 * DAY), [old], { now: CURATOR_NOW, staleDays: 14, deepDays: 30 })
+  assert.deepEqual(deep.deep.map(item => item.text), [old], 'past the deep age it goes to the deep archive')
+  assert.deepEqual(deep.stale, [])
+
+  assert.match(archiveBlock('memory', [{ text: old, age: 20 }], CURATOR_NOW), /# memory — archived 2026-11-25/)
+  assert.match(archiveBlock('memory', [{ text: old, age: 40, deep: true }], CURATOR_NOW), /## deep stale 40d/)
+})
+
+test('curator: a stale entry is moved to the archive file and the store keeps the rest', async () => {
+  const rt = makeRt()
+  const entries = ['Old fact about ports.', 'Fresh fact.']
+  await seedCurator(rt, entries, [20, 1])
+  const report = await runCurator(rt, { target: 'memory', now: CURATOR_NOW, force: true })
+  assert.equal(report.success, true)
+  assert.equal(report.archived, 1)
+  assert.equal(report.kept, 1)
+  assert.deepEqual(parseEntries(await readFile(rt.paths.memoryFile, 'utf8')), ['Fresh fact.'], 'only the stale entry left the store')
+  const archived = await readFile(report.archive[0], 'utf8')
+  assert.match(archived, /Old fact about ports\./, 'the entry text is preserved in the archive')
+  assert.match(report.message, /never deleted/)
+  assert.ok(report.history !== undefined, 'a snapshot holds the store before the archive')
+})
+
+test('curator: below the trigger share the pass only records state; the curate action forces it', async () => {
+  const rt = makeRt({ curator: true })
+  await seedCurator(rt, ['Old fact about ports.'], [20])
+  const calm = await runCurator(rt, { target: 'memory', now: CURATOR_NOW })
+  assert.equal(calm.archived, 0)
+  assert.equal(calm.reason, 'below_share')
+  assert.deepEqual(parseEntries(await readFile(rt.paths.memoryFile, 'utf8')), ['Old fact about ports.'], 'nothing left the store')
+
+  const forced = await runMemory(rt, { target: 'memory', operations: [{ action: 'curate' }] })
+  assert.equal(forced.success, true)
+  assert.equal(forced.archived, 1)
+  assert.deepEqual(parseEntries(await readFile(rt.paths.memoryFile, 'utf8')), [])
+
+  const off = await runMemory(makeRt(), { target: 'memory', operations: [{ action: 'curate' }] })
+  assert.equal(off.success, false, 'a disabled curator refuses the pass instead of archiving silently')
+  assert.match(off.error, /disabled/)
+})
+
+test('curator: pin protects an entry from archiving and unpin releases it', async () => {
+  const rt = makeRt()
+  await seedCurator(rt, ['Old fact about ports.', 'Fresh fact.'], [20, 1])
+
+  const pinned = await runMemory(rt, { target: 'memory', operations: [{ action: 'pin', old_text: 'Old fact' }] })
+  assert.equal(pinned.success, true)
+  assert.equal(pinned.pinned_count, 1)
+  assert.equal((await runCurator(rt, { target: 'memory', now: CURATOR_NOW, force: true })).archived, 0, 'the pinned entry survives')
+  assert.deepEqual(parseEntries(await readFile(rt.paths.memoryFile, 'utf8')), ['Old fact about ports.', 'Fresh fact.'])
+
+  const unpinned = await runMemory(rt, { target: 'memory', operations: [{ action: 'unpin', old_text: 'Old fact' }] })
+  assert.equal(unpinned.success, true)
+  assert.equal((await runCurator(rt, { target: 'memory', now: CURATOR_NOW, force: true })).archived, 1)
+})
+
+test('curator: a pin or curate call may not be mixed with a store write, and an unknown match is refused', async () => {
+  const rt = makeRt()
+  await seedCurator(rt, ['Old fact about ports.'], [20])
+  const mixed = await runMemory(rt, { target: 'memory', operations: [{ action: 'pin', old_text: 'Old fact' }, { action: 'add', content: 'New fact.' }] })
+  assert.equal(mixed.success, false)
+  assert.equal(mixed.entry, undefined)
+  const missing = await runMemory(rt, { target: 'memory', operations: [{ action: 'pin', old_text: 'nothing like this' }] })
+  assert.equal(missing.success, false)
+  assert.match(missing.error, /no entry matched/)
+  const direct = await setPin(rt, { target: 'memory', old_text: 'Old fact', now: CURATOR_NOW })
+  assert.equal(direct.success, true)
+})
+
 // ------------------------------------------------ background post-turn review
 
 test('background: the plan parser keeps only the last tagged JSON object, and the sanitizer enforces the action, shape and size limits', () => {
@@ -1097,6 +1200,8 @@ after(async () => {
 const { REVIEW_KIND, describePressure, installReview, noticeSummary, reviewDue, reviewMessage, reviewPressures, reviewText, usageRows } = await import('../lib/review.mjs')
 
 const { backgroundInstruction, backgroundRoute, parsePlan, runBackgroundReview, sanitizeOperations, skillNames, turnTranscript } = await import('../lib/background.mjs')
+
+const { archiveBlock, buckets, curatorStatePath, entryKey, runCurator, saveState, setPin, syncState } = await import('../lib/curator.mjs')
 
 /** A plugin context that records the listeners the plugin registers. */
 function fakeCtx() {

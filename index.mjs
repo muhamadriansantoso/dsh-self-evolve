@@ -64,6 +64,15 @@ export const Config = Schema.object({
   condenseTimeoutMs: Schema.number().default(120000).description('Time budget of one condensation call. A slower one is abandoned and the batch is rejected as it would be without condensation.'),
   reviewEveryTurns: Schema.number().default(10).description('Periodic memory review: every N user turns, a store at or above reviewFillShare of its char limit is handed to the session with its live usage, so it can curate before a write overflows it. 0 disables the review.'),
   reviewFillShare: Schema.number().default(0.85).description('Usage share (0..1) of a store from which the periodic review speaks up. Below it the review stays silent.'),
+  backgroundReview: Schema.boolean().default(false).description('After a completed user turn, ask the host model whether the turn produced a durable memory fact or skill and apply its guarded add/patch/create/edit operations through the same write paths. It cannot delete, wake the session, or edit the transcript.'),
+  backgroundProvider: Schema.string().description('Provider route of the background review call. Default: the session\'s own model.'),
+  backgroundModel: Schema.string().description('Model of the background review call. Default: the session\'s own model.'),
+  backgroundEveryTurns: Schema.number().default(3).description('Run the background review at most once every N completed user turns. 0 disables it.'),
+  backgroundTimeoutMs: Schema.number().default(30000).description('Time budget of one background review model call.'),
+  curator: Schema.boolean().default(false).description('Stale-entry archiving: an entry whose text has not changed for curatorStaleDays is moved out of the store into a dated archive file once the store reaches curatorTriggerShare of its limit. It never deletes and never touches a pinned entry.'),
+  curatorStaleDays: Schema.number().default(14).description('Age in days after which an unchanged, unpinned entry becomes an archive candidate.'),
+  curatorDeepDays: Schema.number().default(30).description('Age in days after which an entry goes to the deep archive instead.'),
+  curatorTriggerShare: Schema.number().default(0.9).description('Store usage share (0..1) below which the automatic pass only records state and archives nothing. The memory action `curate` ignores it.'),
   memoryEnabled: Schema.boolean().default(true).description('Expose the memory target.'),
   userProfileEnabled: Schema.boolean().default(true).description('Expose the user target.'),
   skillsEnabled: Schema.boolean().default(true).description('Register skill_manage.'),
@@ -319,6 +328,7 @@ async function health(rt) {
     mirror: Array.isArray(rt.config.mirrorCommand) && rt.config.mirrorCommand.length > 0 ? rt.config.mirrorCommand.join(' ') : 'disabled',
     review: { everyTurns: rt.config.reviewEveryTurns ?? 10, fillShare: rt.config.reviewFillShare ?? 0.85 },
     backgroundReview: rt.config.backgroundReview === true ? { everyTurns: rt.config.backgroundEveryTurns ?? 3, timeoutMs: rt.config.backgroundTimeoutMs ?? 30000 } : false,
+    curator: rt.config.curator === true ? { staleDays: rt.config.curatorStaleDays ?? 14, deepDays: rt.config.curatorDeepDays ?? 30, triggerShare: rt.config.curatorTriggerShare ?? 0.9 } : false,
     dataDir: rt.paths.dataDir,
   }
 }

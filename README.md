@@ -62,6 +62,22 @@ write paths. It never deletes, never edits persona/soul/user, never wakes the
 session, and a failed call, unparseable answer or rejected operation leaves
 every store untouched.
 
+**Stale-entry curator.** With `curator: true` an entry whose **text has not
+changed** for `curatorStaleDays` (14) is a candidate; at `curatorDeepDays` (30)
+it goes to a deep archive instead. Nothing is ever deleted: the entry is moved
+out of the active store into a dated file under
+`~/.dsh/self-evolve/archive/` (`memory-YYYY-MM-DD.md`,
+`memory-deep-YYYY-MM-DD.md`), with a snapshot of the store taken first. A
+**pin** bypasses the age entirely — `{ "action": "pin", "old_text": "…" }` on
+the `memory` tool, `unpin` releases it — and pins live in
+`~/.dsh/self-evolve/curator-<target>.json`, keyed by the entry text, so editing
+an entry drops its pin. The automatic pass is tied to pressure: below
+`curatorTriggerShare` (0.9) of the store's limit it only refreshes the state
+file and reports `below_share`, so a small, deliberately curated store is never
+touched. `{ "action": "curate" }` forces one pass now. This is Hermes'
+`curator.py` reduced to its deterministic half: no model call, no consolidation
+fork, and archive instead of delete.
+
 `skill_manage` takes `{ operations: [{ name, action: create | patch | edit | write_file | remove_file | delete | view, ... }] }`;
 any failure rolls back every skill the batch touched, and `delete` moves the skill to
 `~/.dsh/self-evolve/trash/skills/` instead of unlinking it.
@@ -108,6 +124,10 @@ last output line is reported in the tool result as `mirror.summary`.
 | `backgroundProvider` / `backgroundModel` | session's model | provider route and model of the background call; set both to pin them |
 | `backgroundEveryTurns` | `3` | run the background pass at most once every N completed user turns, 0 = off |
 | `backgroundTimeoutMs` | `30000` | time budget of one background model call |
+| `curator` | `false` | stale-entry archiving: move an unchanged, unpinned entry out of the store into a dated archive file (never delete) |
+| `curatorStaleDays` | `14` | age after which an unchanged entry becomes an archive candidate |
+| `curatorDeepDays` | `30` | age after which it goes to the deep archive |
+| `curatorTriggerShare` | `0.9` | store usage share below which the automatic pass archives nothing; `curate` ignores it |
 | `memoryEnabled`, `userProfileEnabled`, `skillsEnabled`, `personaEnabled` | `true` | tool / target switches |
 | `skillsProjectDir` | `.agents/skills` | where `scope: project` creates skills |
 | `customSkillDirs` | `[]` | extra roots searched for existing skills |

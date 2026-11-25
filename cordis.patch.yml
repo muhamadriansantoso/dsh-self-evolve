@@ -32,6 +32,7 @@
         backgroundReview: true
         backgroundEveryTurns: 3
         backgroundTimeoutMs: 30000
+        curator: true
         promptNote: >-
           Self-editing: keep durable facts in the `memory` stores, recurring
           procedures in skills (`skill_manage`) and standing behaviour preferences
