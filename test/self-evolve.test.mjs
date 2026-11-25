@@ -1292,6 +1292,18 @@ test('background: the plan parser keeps only the last tagged JSON object, and th
   assert.deepEqual(sanitizeOperations(undefined), [])
 })
 
+test('background: an operation keyed op/kind is accepted, because models emit it', () => {
+  const memory = sanitizeOperations([{ op: 'add', type: 'memory', content: 'Port demo 4567.' }])
+  assert.deepEqual(memory, [{ action: 'add', content: 'Port demo 4567.' }])
+  const skillMarkdown = '---\nname: x-skill\ndescription: when to use it\n---\n\nbody'
+  const skill = sanitizeOperations([{ op: 'create', name: 'x-skill', content: skillMarkdown }])
+  assert.equal(skill.length, 1)
+  assert.equal(skill[0].action, 'create')
+  // A "type" key never overrides what the action implies, and junk is still junk.
+  assert.deepEqual(sanitizeOperations([{ op: 'delete', content: 'x' }]), [])
+  assert.deepEqual(sanitizeOperations([{ action: 'add' }]), [])
+})
+
 test('background: the route prefers the pinned pair, then the session header, and needs both halves', () => {
   const routed = { requestHeader: () => ({ config: { provider: 'nine-router', model: 'FreeModel' } }) }
   assert.deepEqual(backgroundRoute({ backgroundProvider: 'p', backgroundModel: 'm' }, routed), { provider: 'p', model: 'm' })
@@ -1505,6 +1517,8 @@ test('background: the instruction quotes the current state and the turn, and the
   assert.ok(names.includes('bg-listed'))
   assert.ok(names.includes('bg-flat'))
   assert.ok(!names.includes('not-a-skill'))
+  assert.match(text, /\{"action":"add","content"/, 'the exact shape is shown, not implied')
+  assert.match(text, /goes to a skill/, 'a procedure belongs in a skill, not in memory')
 })
 
 // Registered after every test on purpose: under `--test-name-pattern` a root

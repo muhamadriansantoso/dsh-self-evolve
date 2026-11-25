@@ -1,6 +1,6 @@
 {
   "name": "dsh-self-evolve",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Hermes-style self-editing for DeepSeek Harness: memory, persona_update and skill_manage tools that write MEMORY.md, the persona/soul/user blocks of AGENTS.md, and skills in every scanned root.",
   "author": "Muhamad Rian Santoso <rian_santoso@ymail.com>",
   "license": "MIT",
