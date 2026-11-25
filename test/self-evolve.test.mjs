@@ -1362,6 +1362,50 @@ test('background: a route that rejects reasoning effort is retried without it', 
   assert.match(await readFile(rt.paths.memoryFile, 'utf8'), /Port demo 4567/)
 })
 
+test('background: a plan wrapped in a fence or bare JSON is still read, and a strict retry rescues junk', async () => {
+  const { parsePlanDetail } = await import('../lib/background.mjs')
+  const plan = { operations: [{ action: 'add', content: 'Port demo 4567.' }] }
+  // Gateways that drop the tag: fenced JSON, then a bare object.
+  assert.deepEqual(parsePlanDetail('```json\n' + JSON.stringify(plan) + '\n```').plan, plan)
+  assert.deepEqual(parsePlanDetail('catatan: ' + JSON.stringify(plan) + ' selesai').plan, plan)
+  // Unreadable answers say why, and keep a snippet for the operator.
+  const noTag = parsePlanDetail('tidak ada yang perlu disimpan')
+  assert.equal(noTag.malformed, 'no_tag')
+  assert.match(noTag.snippet, /tidak ada/)
+  assert.equal(parsePlanDetail('<plan>{oops}</plan>').malformed, 'bad_json')
+  assert.equal(parsePlanDetail('<plan>{"operations":3}</plan>').malformed, 'bad_shape')
+
+  // The pass retries once with a stricter instruction, then succeeds.
+  const rt = makeRt({ memoryFile: path.join(HOME, 'bg-retry-plan', 'MEMORY.md'), dataDir: path.join(HOME, 'bg-retry-plan-data') })
+  await mkdir(path.dirname(rt.paths.memoryFile), { recursive: true })
+  await writeFile(rt.paths.memoryFile, 'Seed.')
+  const calls = []
+  const llm = {
+    stream: options => {
+      calls.push(options.messages[0].content[0].text)
+      return modelStream(calls.length === 1 ? 'maaf, tidak ada tag' : '<plan>' + JSON.stringify(plan) + '</plan>')
+    },
+  }
+  const outcome = await runBackgroundReview(rt, {
+    session: {
+      id: 'retry-plan',
+      header: { cwd: HOME },
+      deriveMessages: () => [
+        { role: 'user', content: [{ type: 'text', text: 'Port demo 4567.' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'dicatat' }] },
+      ],
+    },
+    transcript: turnTranscript,
+    current: async () => ({ memory: 'Seed.', skills: '(none)' }),
+    llm,
+    route: { provider: 'nine-router', model: 'RianModel' },
+  })
+  assert.equal(outcome.error, undefined)
+  assert.equal(calls.length, 2)
+  assert.match(calls[1], /ONLY <plan>/)
+  assert.match(await readFile(rt.paths.memoryFile, 'utf8'), /Port demo 4567/)
+})
+
 test('background: a guarded memory add lands through the real write path while a delete in the same answer is refused', async () => {
   const rt = makeRt({ memoryFile: path.join(HOME, 'bg', 'MEMORY.md'), dataDir: path.join(HOME, 'bg-data') })
   await drainNotices(rt)
