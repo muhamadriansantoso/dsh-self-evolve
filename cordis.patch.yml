@@ -4,9 +4,12 @@
 # dependencies.
 #
 # Config notes:
-#   mirrorCommand — sync-agents.py mirrors ~/.dsh/AGENTS.md + ~/.dsh/MEMORY.md to
-#     Hermes (~/.hermes). The systemd path unit already runs it on change; running
-#     it here makes the tool result report the mirror's verdict immediately.
+#   mirrorCommand — optional post-write hook, unset here: it is a per-machine
+#     path (the author uses a sync-agents.py that mirrors ~/.dsh to Hermes). Set
+#     your own command to have the tool result report its verdict immediately.
+#   backgroundReview / curator / skillCurator — shipped OFF: the first costs a
+#     model call every N turns, the other two move entries and skills out of the
+#     way (never deleting them). Turn on what you actually want.
 #   promptNote — one system-prompt sentence that supersedes the AGENTS.md memory
 #     protocol's "use edit_file/write_file" wording with the memory tool.
 #   autoCondense — on by default: a batch that would exceed a store's char
@@ -28,12 +31,12 @@
     - id: self-evolve
       name: dsh-self-evolve
       config:
-        mirrorCommand: ['~/.agent-shared/sync-agents.py']
-        backgroundReview: true
+        # mirrorCommand: ['~/.local/bin/your-mirror-script']  # optional, per machine
+        backgroundReview: false
         backgroundEveryTurns: 3
         backgroundTimeoutMs: 30000
-        curator: true
-        skillCurator: true
+        curator: false
+        skillCurator: false
         skillCuratorIntervalHours: 168
         skillCuratorMinIdleHours: 2
         skillCuratorScanLimit: 20

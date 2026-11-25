@@ -4,6 +4,49 @@ Hermes-style self-editing for DeepSeek Harness: the agent updates its own
 memory, persona and skills from inside a chat, with the same guarantees Hermes
 Agent has (atomic batches, a budget on the final result, recoverable deletes).
 
+## Install
+
+```sh
+dsh plugin add dsh-self-evolve            # from the registry
+dsh plugin add /path/to/dsh-self-evolve   # from a checkout (links the directory)
+```
+
+Node ≥ 24.9 and DSH ≥ 0.2.2 are required. `@deepseek-ai/dsh-tools` and
+`@deepseek-ai/schemastery` are provided by the host, so the package has no
+dependencies and nothing needs `npm install`. Restart the host once after
+installing: module code is loaded at start, only the config hot-reloads.
+
+### What it touches
+
+Everything is under your home directory, nothing is hardcoded to the author's
+machine:
+
+- `~/.dsh/MEMORY.md`, and the `persona` / `soul` / `user` blocks of
+  `~/.dsh/AGENTS.md` (a block only if its markers already exist)
+- skills in the roots it scans — `~/.dsh/skills`, `~/.agents/skills`, and the
+  project's `.agents/skills`
+- `~/.dsh/self-evolve/` — curator state, `archive/` (moved, never deleted),
+  `reports/`, `history/` snapshots, `trash/`
+
+No telemetry, no network calls of its own: the only model calls are the ones
+your session already makes (condense, background review, consolidation), plus
+the optional `mirrorCommand`.
+
+### Safe defaults
+
+The shipped `cordis.patch.yml` turns every writer off:
+
+| Key | Shipped | Why |
+|---|---|---|
+| `mirrorCommand` | unset | a personal sync script must not run on your machine |
+| `backgroundReview` | `false` | an extra model call per N turns costs tokens; opt in |
+| `curator` | `false` | memory archival is a house style, not a default |
+| `skillCurator` | `false` | same, and it can move skills out of a shared hub |
+
+When `skillCurator` is on it is still bounded: only skills this plugin wrote are
+candidates, they are *marked* stale at 14 days before they *move* at 30, one run
+archives at most 10, and nothing is ever deleted.
+
 ## Tools
 
 | Tool | Writes | Reads |
@@ -134,10 +177,12 @@ edits there would be lost on upgrade.
 
 ## Hermes mirror
 
-`mirrorCommand` (default `~/.agent-shared/sync-agents.py` in this profile's bundle
-patch) runs after each write. The script is the existing two-way mirror between
-`~/.dsh/{AGENTS.md,MEMORY.md}` and `~/.hermes/{config.yaml,SOUL.md,memories/}`; its
-last output line is reported in the tool result as `mirror.summary`.
+`mirrorCommand` is **unset by default** and runs only if you configure it, after
+each write. Its last output line is reported in the tool result as
+`mirror.summary`; a missing or failing script is reported, never fatal. The
+author's profile points it at a two-way mirror between `~/.dsh/{AGENTS.md,
+MEMORY.md}` and `~/.hermes/` — that path is specific to that machine, so set your
+own command or leave it off.
 
 ## Configuration (`cordis.patch.yml` row `self-evolve`)
 
