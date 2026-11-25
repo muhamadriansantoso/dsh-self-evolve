@@ -63,7 +63,7 @@ const PROTOCOL = '## Protokol Memori Jangka Panjang (Auto-Update)\n1. Baca MEMOR
 
 async function seedAgentsMd() {
   const text = [
-    '<!-- Managed by ~/.agent-shared/sync-agents.py — edit the blocks, not the wrapper. -->',
+    '<!-- Managed by ~/.config/agents/sync.py — edit the blocks, not the wrapper. -->',
     '',
     '<!-- SYNC:SOUL_START -->',
     SOUL,
