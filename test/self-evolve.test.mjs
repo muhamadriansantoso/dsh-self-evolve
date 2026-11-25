@@ -6,7 +6,7 @@
 //   node --test test/
 
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { after, test } from 'node:test'
@@ -392,7 +392,7 @@ test('tool definitions compile against the installed @deepseek-ai/dsh-tools and 
 
   assert.equal(memory.name, 'memory')
   assert.deepEqual(memory.parameters.required, ['target', 'operations'])
-  assert.equal(skill.parameters.properties.operations.items.oneOf.length, 7)
+  assert.equal(skill.parameters.properties.operations.items.oneOf.length, 11, 'create, patch, edit, write_file, remove_file, delete, view, pin, unpin, curate, scan')
 
   await assert.rejects(memory.execute({ operations: [{ action: 'add', content: 'x' }] }, fakeExec), error => error.code === 'INVALID_ARGS')
   assert.equal((await memory.execute({ target: 'memory', operations: [] }, fakeExec)).success, false, 'an empty batch is refused')
@@ -930,6 +930,124 @@ test('condense: readStream returns the text and usage the installed BlockAssembl
   }
 })
 
+// --------------------------------------- skill curator + separate skill nudge
+
+
+/**
+ * A runtime with its own DSH home AND its own agents home, so skill roots from
+ * earlier tests in this file cannot leak into a skill-curator assertion.
+ */
+function isolatedRt(tag, config = {}) {
+  const previous = process.env.DSH_AGENTS_HOME
+  process.env.DSH_AGENTS_HOME = path.join(HOME, `agents-${tag}`)
+  try {
+    return makeRt({ dshHome: path.join(HOME, `dsh-${tag}`), ...config })
+  } finally {
+    if (previous === undefined) delete process.env.DSH_AGENTS_HOME
+    else process.env.DSH_AGENTS_HOME = previous
+  }
+}
+
+/** Create a skill directory with a backdated SKILL.md. */
+async function seedSkill(rt, name, { ageDays = 0, pinned = false } = {}) {
+  const dir = path.join(rt.paths.skillsDir, name)
+  await mkdir(dir, { recursive: true })
+  const file = path.join(dir, 'SKILL.md')
+  await writeFile(file, `---\nname: ${name}\ndescription: Use when testing. Steps.\n---\n\nBody.\n`)
+  if (ageDays > 0) {
+    const when = new Date(Date.now() - ageDays * DAY)
+    await utimes(file, when, when)
+  }
+  if (pinned) await setSkillPin(rt, { name, pinned: true })
+  return dir
+}
+
+test('skill curator: a stale skill is moved into the archive, never deleted, and an edited one starts over', async () => {
+  const rt = isolatedRt('skills-a', { skillCurator: true })
+  const stale = await seedSkill(rt, 'old-skill', { ageDays: 20 })
+  const fresh = await seedSkill(rt, 'new-skill')
+  const scan = await scanSkills(rt)
+  assert.equal(scan.total, 2)
+  assert.deepEqual(scan.stale.map(row => row.name), ['old-skill'])
+
+  const report = await runSkillCurator(rt, { force: true })
+  assert.equal(report.success, true)
+  assert.equal(report.archived.length, 1)
+  assert.equal(report.archived[0].name, 'old-skill')
+  await assert.rejects(readFile(path.join(stale, 'SKILL.md')), 'the skill left its root')
+  assert.ok((await readFile(path.join(fresh, 'SKILL.md'), 'utf8')).includes('new-skill'), 'the fresh skill stayed')
+  const archived = await readFile(path.join(report.archive, 'old-skill', 'SKILL.md'), 'utf8')
+  assert.match(archived, /name: old-skill/, 'the file is recoverable in the archive')
+  const manifest = await readFile(report.manifest, 'utf8')
+  assert.match(manifest, /stale 20d · old-skill/)
+  assert.equal((await discoverSkills(rt)).length, 1)
+})
+
+test('skill curator: pin bypasses archiving, unpin releases it, and scan changes nothing', async () => {
+  const rt = isolatedRt('skills-b', { skillCurator: true })
+  await seedSkill(rt, 'kept-skill', { ageDays: 40, pinned: true })
+  await seedSkill(rt, 'other-skill', { ageDays: 1 })
+
+  const scan = await scanSkills(rt)
+  assert.deepEqual(scan.stale, [], 'the pinned skill is not a candidate')
+  assert.deepEqual(scan.pinned.map(row => row.name), ['kept-skill'])
+  assert.equal((await discoverSkills(rt)).length, 2, 'scan is read-only')
+
+  const first = await runSkillCurator(rt, { force: true })
+  assert.equal(first.archived.length, 0, 'nothing to archive while pinned')
+
+  await setSkillPin(rt, { name: 'kept-skill', pinned: false })
+  const second = await runSkillCurator(rt, { force: true })
+  assert.equal(second.archived.length, 1)
+  assert.equal(second.archived[0].deep, true, 'past the deep age it lands in the deep archive')
+  assert.match(second.archived[0].to, /deep-kept-skill/)
+})
+
+test('skill curator: the automatic pass stays off below the ceiling and the explicit curate forces it', async () => {
+  const rt = isolatedRt('skills-c', { skillCurator: true, skillCuratorMaxSkills: 5 })
+  await seedSkill(rt, 'lonely-skill', { ageDays: 30 })
+  const calm = await runSkillCurator(rt, {})
+  assert.equal(calm.reason, 'under_ceiling')
+  assert.equal(calm.archived.length, 0)
+  assert.equal((await discoverSkills(rt)).length, 1)
+
+  const forced = await runSkills(rt, HOME, [{ action: 'curate' }])
+  assert.equal(forced.success, true)
+  assert.equal(forced.archived.length, 1)
+  assert.equal(forced.capped, false, 'one candidate needs no capping')
+  assert.equal(forced.batch, 10, 'a run is bounded by skillCuratorBatch')
+  const off = await runSkills(makeRt(), HOME, [{ action: 'curate' }])
+  assert.equal(off.success, false, 'a disabled skill curator refuses instead of archiving')
+})
+
+test('skill nudge: its own interval, its own notice kind, silent on subagents and empty turns', () => {
+  const handler = preStep((() => {
+    const ctx = fakeCtx()
+    installSkillNudge(ctx, { every: 2, count: async () => 11 })
+    return ctx
+  })())
+  const session = { id: 'n1', header: {} }
+  const nudges = decision => decision.messages.filter(message => message?.source?.kind === SKILL_NUDGE_KIND)
+
+  return (async () => {
+    let decision = await preStepCall(handler, { turn: 1, session })
+    assert.equal(nudges(decision).length, 1, 'the first turn a session is seen at nudges')
+    assert.match(nudges(decision)[0].content[0].text, /Skill check \(turn 1, every 2; 11 skills exist\)/)
+    decision = await preStepCall(handler, { turn: 2, session })
+    assert.equal(nudges(decision).length, 0, 'not before the interval')
+    decision = await preStepCall(handler, { turn: 3, step: 2, session })
+    assert.equal(nudges(decision).length, 0, 'only the first step of a turn')
+    decision = await preStepCall(handler, { turn: 3, session })
+    assert.equal(nudges(decision).length, 1, 'due again after the interval')
+    decision = await preStepCall(handler, { turn: 4, session: { id: 'sub', header: { delegationDepth: 1 } } })
+    assert.equal(nudges(decision).length, 0, 'a subagent session never gets the nudge')
+    decision = await preStepCall(handler, { turn: 5, session, messages: [] })
+    assert.equal(nudges(decision).length, 0, 'a wake with nothing claimed gets no notice')
+    assert.equal(installSkillNudge(fakeCtx(), { every: 0, count: async () => 0 }), false, 'interval 0 registers nothing')
+    assert.match(skillNudgeText({ turn: 2, every: 10, skills: 0 }), /no skills exist yet/)
+  })()
+})
+
 // --------------------------------------------- curator (archive, never delete)
 
 const DAY = 86400000
@@ -1197,11 +1315,13 @@ after(async () => {
 
 // --- periodic memory review (lib/review.mjs) -------------------------------
 
-const { REVIEW_KIND, describePressure, installReview, noticeSummary, reviewDue, reviewMessage, reviewPressures, reviewText, usageRows } = await import('../lib/review.mjs')
+const { REVIEW_KIND, SKILL_NUDGE_KIND, describePressure, installReview, installSkillNudge, noticeSummary, reviewDue, reviewMessage, reviewPressures, reviewText, skillNudgeText, usageRows } = await import('../lib/review.mjs')
 
 const { backgroundInstruction, backgroundRoute, parsePlan, runBackgroundReview, sanitizeOperations, skillNames, turnTranscript } = await import('../lib/background.mjs')
 
 const { archiveBlock, buckets, curatorStatePath, entryKey, runCurator, saveState, setPin, syncState } = await import('../lib/curator.mjs')
+
+const { discoverSkills, runSkillCurator, scanSkills, setSkillPin, skillStatePath } = await import('../lib/skillcurator.mjs')
 
 /** A plugin context that records the listeners the plugin registers. */
 function fakeCtx() {

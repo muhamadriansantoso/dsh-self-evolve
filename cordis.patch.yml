@@ -33,6 +33,8 @@
         backgroundEveryTurns: 3
         backgroundTimeoutMs: 30000
         curator: true
+        skillCurator: true
+        skillNudgeEveryTurns: 10
         promptNote: >-
           Self-editing: keep durable facts in the `memory` stores, recurring
           procedures in skills (`skill_manage`) and standing behaviour preferences

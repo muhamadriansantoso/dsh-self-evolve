@@ -78,6 +78,25 @@ touched. `{ "action": "curate" }` forces one pass now. This is Hermes'
 `curator.py` reduced to its deterministic half: no model call, no consolidation
 fork, and archive instead of delete.
 
+**Skill curator.** The same policy for skills: an unpinned skill whose
+`SKILL.md` has not changed for `curatorStaleDays` (14) is a candidate, and
+`curatorDeepDays` (30) sends it to the deep archive. Nothing is deleted — the
+skill directory (or flat `.md`) is **moved** into
+`~/.dsh/self-evolve/archive/skills/<date>/<name>` and named in that tree's
+`INDEX.md`, so a restore is a single move back. Because the skill hub is
+shared, an archived skill also disappears from Hermes there: that is why the
+automatic pass only starts above `skillCuratorMaxSkills` (0 = never) while
+`skill_manage { "action": "curate" }` runs it now and
+`{ "action": "scan" }` shows what it would take; `pin` / `unpin` (with `name`)
+keep a skill out of it.
+
+**Skill nudge.** Hermes keeps a separate `skills.creation_nudge_interval`;
+here `skillNudgeEveryTurns` (10) adds one step-local notice on the first step of
+every Nth user turn asking whether the session produced a reusable procedure
+worth a `skill_manage` write. It carries its own source kind
+(`self-evolve-skill-nudge`), never fires in a subagent session or on a wake with
+nothing claimed, and `0` turns it off.
+
 `skill_manage` takes `{ operations: [{ name, action: create | patch | edit | write_file | remove_file | delete | view, ... }] }`;
 any failure rolls back every skill the batch touched, and `delete` moves the skill to
 `~/.dsh/self-evolve/trash/skills/` instead of unlinking it.
@@ -128,6 +147,10 @@ last output line is reported in the tool result as `mirror.summary`.
 | `curatorStaleDays` | `14` | age after which an unchanged entry becomes an archive candidate |
 | `curatorDeepDays` | `30` | age after which it goes to the deep archive |
 | `curatorTriggerShare` | `0.9` | store usage share below which the automatic pass archives nothing; `curate` ignores it |
+| `skillCurator` | `false` | skill archiving: move an unchanged, unpinned skill into the archive tree (never delete) |
+| `skillCuratorMaxSkills` | `0` | automatic skill archiving starts above this many skills; `0` = only the explicit `curate` action |
+| `skillCuratorBatch` | `10` | most skills one run may archive, so a single call never sweeps the library |
+| `skillNudgeEveryTurns` | `10` | every N user turns, one notice asking whether a reusable procedure belongs in a skill |
 | `memoryEnabled`, `userProfileEnabled`, `skillsEnabled`, `personaEnabled` | `true` | tool / target switches |
 | `skillsProjectDir` | `.agents/skills` | where `scope: project` creates skills |
 | `customSkillDirs` | `[]` | extra roots searched for existing skills |

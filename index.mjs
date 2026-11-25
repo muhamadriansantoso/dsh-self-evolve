@@ -33,7 +33,8 @@ import { backgroundRoute, runBackgroundReview, skillNames, turnTranscript } from
 import { condenseRoute, condenseWithLlm } from './lib/condense.mjs'
 import { readText } from './lib/fsx.mjs'
 import { isTrustedOrigin, sendJson } from './lib/http.mjs'
-import { installReview, reviewDue, usageRows } from './lib/review.mjs'
+import { installReview, installSkillNudge, reviewDue, usageRows } from './lib/review.mjs'
+import { discoverSkills } from './lib/skillcurator.mjs'
 import { skillRoots } from './lib/skills.mjs'
 import { resolvePaths, resolveStores } from './lib/stores.mjs'
 import { memoryTool, personaTool, skillTool } from './lib/tools.mjs'
@@ -73,6 +74,10 @@ export const Config = Schema.object({
   curatorStaleDays: Schema.number().default(14).description('Age in days after which an unchanged, unpinned entry becomes an archive candidate.'),
   curatorDeepDays: Schema.number().default(30).description('Age in days after which an entry goes to the deep archive instead.'),
   curatorTriggerShare: Schema.number().default(0.9).description('Store usage share (0..1) below which the automatic pass only records state and archives nothing. The memory action `curate` ignores it.'),
+  skillCurator: Schema.boolean().default(false).description('Skill archiving: an unpinned skill whose SKILL.md has not changed for curatorStaleDays can be moved into the archive tree by `skill_manage {action:"curate"}`. Skills are never deleted.'),
+  skillCuratorMaxSkills: Schema.number().default(0).description('Automatic skill archiving only starts above this many skills. 0 disables the automatic pass; the explicit `curate` action always runs.'),
+  skillCuratorBatch: Schema.number().default(10).description('Most skills one curator run may archive, so a single call never sweeps the library.'),
+  skillNudgeEveryTurns: Schema.number().default(10).description('Every N user turns, add one step-local notice asking whether this session produced a reusable procedure worth a skill. 0 disables it.'),
   memoryEnabled: Schema.boolean().default(true).description('Expose the memory target.'),
   userProfileEnabled: Schema.boolean().default(true).description('Expose the user target.'),
   skillsEnabled: Schema.boolean().default(true).description('Register skill_manage.'),
@@ -257,6 +262,14 @@ export function apply(ctx, config = {}) {
     installBackgroundReview(ctx, rt)
   }
   if (config.skillsEnabled !== false) {
+    // Hermes' separate skill nudge: its own interval, its own notice, so skills
+    // can be reminded at a cadence independent of the memory review.
+    installSkillNudge(ctx, {
+      every: config.skillNudgeEveryTurns ?? 10,
+      count: async () => (await discoverSkills(rt, {})).length,
+    })
+  }
+  if (config.skillsEnabled !== false) {
     ctx.tools.register(skillTool(defineTool, rt, {
       sessionOf: exec => cwdOf(ctx, exec),
       catalogLookup: (exec, cwd) => catalogLookup(ctx, exec, cwd),
@@ -329,6 +342,8 @@ async function health(rt) {
     review: { everyTurns: rt.config.reviewEveryTurns ?? 10, fillShare: rt.config.reviewFillShare ?? 0.85 },
     backgroundReview: rt.config.backgroundReview === true ? { everyTurns: rt.config.backgroundEveryTurns ?? 3, timeoutMs: rt.config.backgroundTimeoutMs ?? 30000 } : false,
     curator: rt.config.curator === true ? { staleDays: rt.config.curatorStaleDays ?? 14, deepDays: rt.config.curatorDeepDays ?? 30, triggerShare: rt.config.curatorTriggerShare ?? 0.9 } : false,
+    skillCurator: rt.config.skillCurator === true ? { staleDays: rt.config.curatorStaleDays ?? 14, maxSkills: rt.config.skillCuratorMaxSkills ?? 0, batch: rt.config.skillCuratorBatch ?? 10 } : false,
+    skillNudge: { everyTurns: rt.config.skillNudgeEveryTurns ?? 10 },
     dataDir: rt.paths.dataDir,
   }
 }
