@@ -234,6 +234,7 @@ own command or leave it off.
 | `backgroundEveryTurns` | `3` | run the background pass at most once every N completed user turns, 0 = off |
 | `backgroundTimeoutMs` | `30000` | time budget of one background model call |
 | `curator` | `false` | stale-entry archiving: move an unchanged, unpinned entry out of the store into a dated archive file (never delete) |
+| `curatorReferenceGuard` | `true` | Never archive a skill that another skill, `MEMORY.md` or `AGENTS.md` still names |
 | `curatorStaleDays` | `14` | age after which an unchanged entry becomes an archive candidate |
 | `curatorDeepDays` | `30` | age after which it goes to the deep archive |
 | `curatorTriggerShare` | `0.9` | store usage share below which the automatic pass archives nothing; `curate` ignores it |

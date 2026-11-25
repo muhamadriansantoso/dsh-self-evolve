@@ -1015,6 +1015,31 @@ test('skill curator: managed-only, then active → stale → archived, never del
   assert.equal((await loadSkillState(rt)).last_report_path, report.report)
 })
 
+test('skill curator: an old skill another file still points at is kept, and the guard can be turned off', async () => {
+  const rt = isolatedRt('skills-ref', { skillCurator: true })
+  const oldSkill = await seedSkill(rt, 'referenced-old', { ageDays: 45, managed: true })
+  // A neighbour that tells the agent to load it — age alone would call this abandoned.
+  await seedSkill(rt, 'referrer', {})
+  await writeFile(path.join(rt.paths.skillsDir, 'referrer', 'SKILL.md'),
+    '---\nname: referrer\ndescription: d\n---\n\nLoad referenced-old before you touch the panel.\n')
+
+  const kept = await runSkillCurator(rt, { force: true })
+  assert.deepEqual(kept.archived, [])
+  assert.deepEqual(kept.protected_by_reference, [{ name: 'referenced-old', age_days: 45 }])
+  assert.match(kept.message, /kept because other files still reference them/)
+  assert.ok((await readFile(path.join(oldSkill, 'SKILL.md'), 'utf8')).includes('referenced-old'), 'the file stays')
+
+  // With the guard off the same skill is archived, so the default is what saves it.
+  const off = isolatedRt('skills-ref-off', { skillCurator: true, curatorReferenceGuard: false })
+  const doomed = await seedSkill(off, 'referenced-old', { ageDays: 45, managed: true })
+  await seedSkill(off, 'referrer', {})
+  await writeFile(path.join(off.paths.skillsDir, 'referrer', 'SKILL.md'),
+    '---\nname: referrer\ndescription: d\n---\n\nLoad referenced-old before you touch the panel.\n')
+  const archived = await runSkillCurator(off, { force: true })
+  assert.equal(archived.archived.length, 1)
+  assert.ok(!(await stat(path.join(doomed, 'SKILL.md')).then(() => true, () => false)), 'the file moved')
+})
+
 test('skill curator: pin bypasses archiving, unpin releases it, scan changes nothing', async () => {
   const rt = isolatedRt('skills-b', { skillCurator: true })
   await seedSkill(rt, 'kept-skill', { ageDays: 40, managed: true, pinned: true })
