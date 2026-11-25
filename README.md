@@ -256,6 +256,19 @@ own command or leave it off.
 | `promptNote` | `''` | one system-prompt sentence about using the tools |
 | `routePrefix` | `/api/self-evolve` | `GET <prefix>/health` |
 
+## Verifying the background pass
+
+A pass that never fires looks exactly like a pass that found nothing. Health
+therefore reports the last verdict:
+
+```sh
+curl -s 127.0.0.1:<port>/api/self-evolve/health | jq .backgroundReview.last
+# {"at":"…","applied":0,"skipped":0,"duration_ms":16147,"result":"no_operations"}
+```
+
+`result` is the verdict (`applied`, `no_changes`, `no_operations`, …); the same
+JSON is kept at `<dataDir>/background-last.json`.
+
 ## Tests
 
 ```sh

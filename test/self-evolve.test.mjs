@@ -1395,7 +1395,7 @@ test('background: a guarded memory add lands through the real write path while a
   assert.equal(calls[0].provider, 'nine-router')
   const status = JSON.parse(await readFile(backgroundStatusPath(rt), 'utf8'))
   assert.equal(status.applied, 1, 'the pass records that it ran')
-  assert.equal(status.error, undefined)
+  assert.equal(status.result, 'applied', 'a benign outcome is a result, not an error')
   const queued = await drainNotices(rt)
   assert.deepEqual(queued.map(item => item.text), ['Memory updated'], 'the pass leaves a human-facing line')
   assert.deepEqual(await drainNotices(rt), [], 'draining is one-shot')
