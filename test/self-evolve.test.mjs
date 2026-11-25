@@ -392,7 +392,7 @@ test('tool definitions compile against the installed @deepseek-ai/dsh-tools and 
 
   assert.equal(memory.name, 'memory')
   assert.deepEqual(memory.parameters.required, ['target', 'operations'])
-  assert.equal(skill.parameters.properties.operations.items.oneOf.length, 14, 'create, patch, edit, write_file, remove_file, delete, view, pin, unpin, curate, scan, pause, resume, consolidate')
+  assert.equal(skill.parameters.properties.operations.items.oneOf.length, 15, 'create, patch, edit, write_file, remove_file, delete, view, pin, unpin, curate, scan, pause, resume, consolidate, audit')
 
   await assert.rejects(memory.execute({ operations: [{ action: 'add', content: 'x' }] }, fakeExec), error => error.code === 'INVALID_ARGS')
   assert.equal((await memory.execute({ target: 'memory', operations: [] }, fakeExec)).success, false, 'an empty batch is refused')
@@ -1013,6 +1013,75 @@ test('skill curator: managed-only, then active → stale → archived, never del
   assert.match(reportFile, /archived old-skill \(stale 40d\)/)
   assert.match(reportFile, /revived old-skill/)
   assert.equal((await loadSkillState(rt)).last_report_path, report.report)
+})
+
+test('skill audit: a quiet skill is rewritten in place, archived, or kept — never appended', async () => {
+  const { runSkillAudit } = await import('../lib/skillaudit.mjs')
+  const config = { skillCuratorAudit: true, skillCuratorAuditDays: 30, skillCuratorProvider: 'p', skillCuratorModel: 'm' }
+
+  // rewrite: the whole file is replaced, and the old body is kept in history.
+  const rt = isolatedRt('audit-rewrite', config)
+  const dir = await seedSkill(rt, 'audit-old', { ageDays: 60, managed: true })
+  const before = await readFile(path.join(dir, 'SKILL.md'), 'utf8')
+  const calls = []
+  const rewrite = await runSkillAudit(rt, {
+    llm: { stream: options => { calls.push(options); return modelStream('<audit>{"verdict":"rewrite","reason":"method changed","content":"---\\nname: audit-old\\ndescription: new method\\n---\\n\\nNew steps only."}</audit>') } },
+  })
+  assert.equal(calls.length, 1)
+  assert.equal(rewrite.rewritten, 1)
+  const after = await readFile(path.join(dir, 'SKILL.md'), 'utf8')
+  assert.match(after, /New steps only/)
+  assert.ok(!after.includes('old step'), 'the outdated body is replaced, not appended to')
+  const history = await readdir(path.join(rt.paths.dataDir, 'history', 'skills', 'audit-old'))
+  assert.equal(history.length, 1, 'the previous body is recoverable')
+  const state = await loadSkillState(rt)
+  assert.ok(state.entries['audit-old'].audited_at, 'the skill is marked audited so it is not asked again')
+
+  // keep: untouched, and the age gate keeps a fresh skill out of the batch.
+  const keepRt = isolatedRt('audit-keep', config)
+  const fresh = await seedSkill(keepRt, 'audit-fresh', { managed: true })
+  const stale = await seedSkill(keepRt, 'audit-stale', { ageDays: 60, managed: true })
+  let keepCalls = 0
+  const kept = await runSkillAudit(keepRt, {
+    llm: { stream: () => { keepCalls += 1; return modelStream('<audit>{"verdict":"keep","reason":"still right"}</audit>') } },
+  })
+  assert.equal(keepCalls, 1, 'only the quiet skill is audited')
+  assert.equal(kept.kept, 1)
+  assert.match(await readFile(path.join(stale, 'SKILL.md'), 'utf8'), /audit-stale/)
+  assert.match(await readFile(path.join(fresh, 'SKILL.md'), 'utf8'), /audit-fresh/)
+
+  // archive: the file is moved, not deleted.
+  const archiveRt = isolatedRt('audit-archive', config)
+  const doomed = await seedSkill(archiveRt, 'audit-dead', { ageDays: 90, managed: true })
+  const archived = await runSkillAudit(archiveRt, {
+    llm: { stream: () => modelStream('<audit>{"verdict":"archive","reason":"superseded by dsh-doc"}</audit>') },
+  })
+  assert.equal(archived.archived, 1)
+  assert.equal(await stat(path.join(doomed, 'SKILL.md')).then(() => 'there', () => 'gone'), 'gone')
+})
+
+test('skill audit: a rewrite without the same frontmatter name is refused, and the batch is capped', async () => {
+  const { runSkillAudit } = await import('../lib/skillaudit.mjs')
+  const rt = isolatedRt('audit-guard', { skillCuratorAudit: true, skillCuratorAuditDays: 30, skillCuratorAuditBatch: 2, skillCuratorProvider: 'p', skillCuratorModel: 'm' })
+  const names = ['audit-a', 'audit-b', 'audit-c']
+  const dirs = []
+  for (const name of names) dirs.push(await seedSkill(rt, name, { ageDays: 60, managed: true }))
+  let calls = 0
+  const result = await runSkillAudit(rt, {
+    llm: { stream: () => { calls += 1; return modelStream('<audit>{"verdict":"rewrite","content":"---\\nname: someone-else\\ndescription: d\\n---\\n\\nbody"}</audit>') } },
+  })
+  assert.equal(calls, 2, 'the batch cap bounds model calls')
+  assert.equal(result.rewritten, 0, 'a mismatched name never overwrites a skill')
+  assert.equal(result.kept, 2)
+  assert.match(result.audited[0].reason, /frontmatter_name_mismatch/)
+  for (const dir of dirs) assert.match(await readFile(path.join(dir, 'SKILL.md'), 'utf8'), /audit-/, 'no file was touched')
+
+  // Disabled means no call at all, and no route means a reason instead of a crash.
+  const off = isolatedRt('audit-off', { skillCuratorAudit: false })
+  assert.equal((await runSkillAudit(off, { llm: { stream: () => { throw new Error('never') } } })).skipped, 'disabled')
+  const noRoute = isolatedRt('audit-noroute', { skillCuratorAudit: true })
+  await seedSkill(noRoute, 'audit-x', { ageDays: 60, managed: true })
+  assert.equal((await runSkillAudit(noRoute, { llm: { stream: () => modelStream('<audit>{"verdict":"keep"}</audit>') } })).skipped, 'no_model')
 })
 
 test('skill curator: an old skill another file still points at is kept, and the guard can be turned off', async () => {

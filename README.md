@@ -234,6 +234,10 @@ own command or leave it off.
 | `backgroundEveryTurns` | `3` | run the background pass at most once every N completed user turns, 0 = off |
 | `backgroundTimeoutMs` | `30000` | time budget of one background model call |
 | `curator` | `false` | stale-entry archiving: move an unchanged, unpinned entry out of the store into a dated archive file (never delete) |
+| `skillCuratorAudit` | `false` | Ask a model whether a quiet managed skill is still correct; it may rewrite the whole file or archive it |
+| `skillCuratorAuditDays` | `30` | Days without a write before a skill is audited |
+| `skillCuratorAuditBatch` | `3` | Skills one audit run may spend a model call on |
+| `skillCuratorAuditProvider` / `skillCuratorAuditModel` | unset | Audit route; falls back to `skillCurator*`, then `condense*`, then the session |
 | `curatorReferenceGuard` | `true` | Never archive a skill that another skill, `MEMORY.md` or `AGENTS.md` still names |
 | `curatorStaleDays` | `14` | age after which an unchanged entry becomes an archive candidate |
 | `curatorDeepDays` | `30` | age after which it goes to the deep archive |
@@ -257,6 +261,22 @@ own command or leave it off.
 | `mirrorTimeoutMs` | `8000` | its time budget |
 | `promptNote` | `''` | one system-prompt sentence about using the tools |
 | `routePrefix` | `/api/self-evolve` | `GET <prefix>/health` |
+
+## Auditing a skill's content
+
+Age says a skill was not used, never that its method is wrong. With
+`skillCuratorAudit: true` the curator run also asks a model about each quiet
+managed skill (older than `skillCuratorAuditDays`, at most
+`skillCuratorAuditBatch` per run) and accepts one verdict:
+
+- `keep` — still correct; the skill is marked audited so it is not asked again.
+- `rewrite` — outdated; the model returns the complete new `SKILL.md`, which
+  **replaces** the file (never appended). A rewrite whose frontmatter `name`
+  differs is refused, and the old body is snapshotted in `history/skills/<name>/`.
+- `archive` — obsolete or superseded; the file moves to the recoverable archive.
+
+Run it by hand with the skill tool's `audit` action. Verdicts land in the run
+report and, when something changed, in a chat notice.
 
 ## Verifying the background pass
 

@@ -33,7 +33,7 @@ import { backgroundRoute, readBackgroundStatus, runBackgroundReview, skillNames,
 import { condenseRoute, condenseWithLlm } from './lib/condense.mjs'
 import { readText } from './lib/fsx.mjs'
 import { isTrustedOrigin, sendJson } from './lib/http.mjs'
-import { installNotices } from './lib/notice.mjs'
+import { installNotices, queueNotice } from './lib/notice.mjs'
 import { installReview, installSkillNudge, reviewDue, usageRows } from './lib/review.mjs'
 import { applyConsolidation, consolidateSkills, consolidationRoute, curatorDue, loadSkillState, runSkillCurator, saveSkillState, scanSkills, DEFAULT_INTERVAL_HOURS, DEFAULT_MIN_IDLE_HOURS } from './lib/skillcurator.mjs'
 import { discoverSkills } from './lib/skillcurator.mjs'
@@ -85,6 +85,11 @@ export const Config = Schema.object({
   skillCuratorScanLimit: Schema.number().default(20).description('Rows `skill_manage {action:"scan"}` returns; the total is always reported.'),
   skillCuratorProvider: Schema.string().description('Provider for the opt-in consolidation pass; falls back to condenseProvider, then to the session route.'),
   skillCuratorModel: Schema.string().description('Model for the opt-in consolidation pass; falls back to condenseModel, then to the session route.'),
+  skillCuratorAudit: Schema.boolean().default(false).description('Ask a model whether a quiet managed skill is still correct, and let it rewrite or archive it.'),
+  skillCuratorAuditDays: Schema.number().default(30).description('Days without a write before a skill is audited.'),
+  skillCuratorAuditBatch: Schema.number().default(3).description('Skills one audit run may spend a model call on.'),
+  skillCuratorAuditProvider: Schema.string().description('Provider for the audit; falls back to skillCuratorProvider, condenseProvider, then the session route.'),
+  skillCuratorAuditModel: Schema.string().description('Model for the audit; same fallback chain as the provider.'),
   skillCuratorConsolidate: Schema.boolean().default(false).description('Hermes parity, OFF by default: the scheduled pass also asks the model to fold overlapping managed skills into one umbrella. Needs condenseProvider/condenseModel.'),
   notificationMode: Schema.string().default('on').description('Chat-visible summary of what the automatic passes changed: on (generic lines), verbose (with action detail), off.'),
   skillNudgeEveryTurns: Schema.number().default(10).description('Every N user turns, add one step-local notice asking whether this session produced a reusable procedure worth a skill. 0 disables it.'),
@@ -296,6 +301,12 @@ function installSkillCuratorScheduler(ctx, rt) {
           if (scan.managed <= rt.config.skillCuratorMaxSkills) return
         }
         await runSkillCurator(rt, { cwd, now })
+        if (rt.config.skillCuratorAudit === true) {
+          const audited = await runSkillAudit(rt, { cwd, now, llm: ctx.get('llm'), session })
+          if (audited.rewritten + audited.archived > 0) {
+            await queueNotice(rt, `Skill audit: ${audited.rewritten} rewritten, ${audited.archived} archived, ${audited.kept} kept`)
+          }
+        }
         if (rt.config.skillCuratorConsolidate === true) {
           const llm = ctx.get('llm')
           const route = consolidationRoute(rt.config, session)
@@ -435,6 +446,7 @@ async function health(rt) {
           intervalHours: rt.config.skillCuratorIntervalHours ?? DEFAULT_INTERVAL_HOURS,
           minIdleHours: rt.config.skillCuratorMinIdleHours ?? DEFAULT_MIN_IDLE_HOURS,
           consolidate: rt.config.skillCuratorConsolidate === true,
+      audit: { enabled: rt.config.skillCuratorAudit === true, days: rt.config.skillCuratorAuditDays ?? 30, batch: rt.config.skillCuratorAuditBatch ?? 3 },
           paused: skillState.paused === true,
           lastRunAt: skillState.last_run_at,
           runCount: skillState.run_count ?? 0,
