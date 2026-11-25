@@ -7,9 +7,18 @@ Agent has (atomic batches, a budget on the final result, recoverable deletes).
 ## Install
 
 ```sh
-dsh plugin add dsh-self-evolve            # from the registry
-dsh plugin add /path/to/dsh-self-evolve   # from a checkout (links the directory)
+git clone https://github.com/muhamadriansantoso/dsh-self-evolve
+dsh plugin add /path/to/dsh-self-evolve          # links the checkout (recommended)
+dsh plugin add git+https://github.com/muhamadriansantoso/dsh-self-evolve.git
 ```
+
+> The npm name `dsh-self-evolve` belongs to a **different project**
+> (`jianghuiengineer`). Always install from this repository — by checkout or by
+> the git URL above — never by the bare package name.
+
+Updating an existing install: `git pull` in the checkout (or re-add the git URL),
+then restart the host — module code is loaded at start, so a running process keeps
+the old code until it restarts.
 
 Node ≥ 24.9 and DSH ≥ 0.2.2 are required. `@deepseek-ai/dsh-tools` and
 `@deepseek-ai/schemastery` are provided by the host, so the package has no
