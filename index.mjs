@@ -29,7 +29,7 @@ import Schema from '@deepseek-ai/schemastery'
 
 import { parseEntries } from './lib/entries.mjs'
 import { readDocument } from './lib/textstore.mjs'
-import { backgroundRoute, runBackgroundReview, skillNames, turnTranscript } from './lib/background.mjs'
+import { backgroundRoute, readBackgroundStatus, runBackgroundReview, skillNames, turnEndReason, turnTranscript } from './lib/background.mjs'
 import { condenseRoute, condenseWithLlm } from './lib/condense.mjs'
 import { readText } from './lib/fsx.mjs'
 import { isTrustedOrigin, sendJson } from './lib/http.mjs'
@@ -217,8 +217,10 @@ function installBackgroundReview(ctx, rt) {
   const seen = new WeakMap()
   ctx.on('session/event', async (session, event) => {
     if (event?.type !== 'turn/end') return
-    // Only a turn that really finished is worth learning from.
-    if (event.data?.kind !== 'completed' && event.data?.kind !== 'max-tokens') return
+    // Only a turn that really finished is worth learning from. The reason lives
+    // at data.reason.kind in this DSH; the accessor tolerates both shapes.
+    const reason = turnEndReason(event)
+    if (reason !== 'completed' && reason !== 'max-tokens') return
     if ((session.header?.delegationDepth ?? 0) > 0) return
     const turn = event.data?.turn
     if (!Number.isSafeInteger(turn)) return
@@ -420,7 +422,9 @@ async function health(rt) {
     skills: { roots: roots.map(root => ({ path: root.path, kind: root.kind })) },
     mirror: Array.isArray(rt.config.mirrorCommand) && rt.config.mirrorCommand.length > 0 ? rt.config.mirrorCommand.join(' ') : 'disabled',
     review: { everyTurns: rt.config.reviewEveryTurns ?? 10, fillShare: rt.config.reviewFillShare ?? 0.85 },
-    backgroundReview: rt.config.backgroundReview === true ? { everyTurns: rt.config.backgroundEveryTurns ?? 3, timeoutMs: rt.config.backgroundTimeoutMs ?? 30000 } : false,
+    backgroundReview: rt.config.backgroundReview === true
+      ? { everyTurns: rt.config.backgroundEveryTurns ?? 3, timeoutMs: rt.config.backgroundTimeoutMs ?? 30000, last: await readBackgroundStatus(rt) ?? null }
+      : false,
     curator: rt.config.curator === true ? { staleDays: rt.config.curatorStaleDays ?? 14, deepDays: rt.config.curatorDeepDays ?? 30, triggerShare: rt.config.curatorTriggerShare ?? 0.9 } : false,
     skillCurator: rt.config.skillCurator === true
       ? {

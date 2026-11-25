@@ -1317,6 +1317,18 @@ test('background: the transcript keeps user and assistant text only, bounded at 
   assert.ok(out.endsWith('x'.repeat(100)))
 })
 
+test('background: the turn/end reason is read from data.reason.kind, the shape dsh-session emits', () => {
+  // The real event, as dsh-session/lib/index.js builds it.
+  assert.equal(turnEndReason({ type: 'turn/end', data: { turn: 3, reason: { kind: 'completed' } } }), 'completed')
+  assert.equal(turnEndReason({ type: 'turn/end', data: { turn: 3, reason: { kind: 'max-tokens' } } }), 'max-tokens')
+  assert.equal(turnEndReason({ type: 'turn/end', data: { turn: 3, reason: { kind: 'aborted' } } }), 'aborted')
+  // Tolerated shapes: older flat payload and nothing at all.
+  assert.equal(turnEndReason({ type: 'turn/end', data: { turn: 3, kind: 'completed' } }), 'completed')
+  assert.equal(turnEndReason({ type: 'turn/end', data: { turn: 3 } }), undefined)
+  assert.equal(turnEndReason({ type: 'turn/end' }), undefined)
+  assert.equal(turnEndReason(undefined), undefined)
+})
+
 test('background: a guarded memory add lands through the real write path while a delete in the same answer is refused', async () => {
   const rt = makeRt({ memoryFile: path.join(HOME, 'bg', 'MEMORY.md'), dataDir: path.join(HOME, 'bg-data') })
   await drainNotices(rt)
@@ -1348,6 +1360,9 @@ test('background: a guarded memory add lands through the real write path while a
   assert.ok(written.includes('Seed entry about ports.'), 'the remove op was refused, not applied')
   assert.equal(calls.length, 1)
   assert.equal(calls[0].provider, 'nine-router')
+  const status = JSON.parse(await readFile(backgroundStatusPath(rt), 'utf8'))
+  assert.equal(status.applied, 1, 'the pass records that it ran')
+  assert.equal(status.error, undefined)
   const queued = await drainNotices(rt)
   assert.deepEqual(queued.map(item => item.text), ['Memory updated'], 'the pass leaves a human-facing line')
   assert.deepEqual(await drainNotices(rt), [], 'draining is one-shot')
@@ -1426,7 +1441,7 @@ after(async () => {
 
 const { REVIEW_KIND, SKILL_NUDGE_KIND, describePressure, installReview, installSkillNudge, noticeSummary, reviewDue, reviewMessage, reviewPressures, reviewText, skillNudgeText, usageRows } = await import('../lib/review.mjs')
 
-const { backgroundInstruction, backgroundRoute, parsePlan, runBackgroundReview, sanitizeOperations, skillNames, turnTranscript } = await import('../lib/background.mjs')
+const { backgroundInstruction, backgroundRoute, backgroundStatusPath, parsePlan, runBackgroundReview, sanitizeOperations, skillNames, turnEndReason, turnTranscript } = await import('../lib/background.mjs')
 
 const { archiveBlock, buckets, curatorStatePath, entryKey, runCurator, saveState, setPin, syncState } = await import('../lib/curator.mjs')
 
