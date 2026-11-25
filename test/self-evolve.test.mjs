@@ -1304,6 +1304,21 @@ test('background: an operation keyed op/kind is accepted, because models emit it
   assert.deepEqual(sanitizeOperations([{ action: 'add' }]), [])
 })
 
+test('background: a skill the transcript names is quoted in full, so an edit keeps what it cannot see', async () => {
+  const rt = makeRt()
+  await mkdir(path.join(rt.paths.skillsDir, 'bg-quoted'), { recursive: true })
+  const original = '---\nname: bg-quoted\ndescription: d\n---\n\nStep one: keep this line.\n'
+  await writeFile(path.join(rt.paths.skillsDir, 'bg-quoted', 'SKILL.md'), original)
+  const bodies = await mentionedSkillBodies(rt, HOME, 'the bg-quoted skill returned nothing_stale')
+  assert.match(bodies, /Step one: keep this line/, 'the body is quoted')
+  assert.match(bodies, /### bg-quoted/)
+  // A skill that is not mentioned is not quoted, and a near-miss name does not match.
+  assert.equal(await mentionedSkillBodies(rt, HOME, 'bg-quote is a different word'), '')
+  const instruction = backgroundInstruction('turn', { memory: 'm', skills: 'bg-quoted', skillBodies: bodies })
+  assert.match(instruction, /CURRENT SKILL BODIES/)
+  assert.match(instruction, /Step one: keep this line/)
+})
+
 test('background: the route prefers the pinned pair, then the session header, and needs both halves', () => {
   const routed = { requestHeader: () => ({ config: { provider: 'nine-router', model: 'FreeModel' } }) }
   assert.deepEqual(backgroundRoute({ backgroundProvider: 'p', backgroundModel: 'm' }, routed), { provider: 'p', model: 'm' })
@@ -1532,7 +1547,7 @@ after(async () => {
 
 const { REVIEW_KIND, SKILL_NUDGE_KIND, describePressure, installReview, installSkillNudge, noticeSummary, reviewDue, reviewMessage, reviewPressures, reviewText, skillNudgeText, usageRows } = await import('../lib/review.mjs')
 
-const { backgroundInstruction, backgroundRoute, backgroundStatusPath, parsePlan, runBackgroundReview, sanitizeOperations, skillNames, turnEndReason, turnTranscript } = await import('../lib/background.mjs')
+const { backgroundInstruction, backgroundRoute, backgroundStatusPath, mentionedSkillBodies, parsePlan, runBackgroundReview, sanitizeOperations, skillNames, turnEndReason, turnTranscript } = await import('../lib/background.mjs')
 
 const { archiveBlock, buckets, curatorStatePath, entryKey, runCurator, saveState, setPin, syncState } = await import('../lib/curator.mjs')
 

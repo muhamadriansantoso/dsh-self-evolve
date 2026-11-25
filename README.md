@@ -230,6 +230,7 @@ own command or leave it off.
 | `reviewFillShare` | `0.85` | store usage share (0..1) from which the review speaks |
 | `backgroundReview` | `false` | post-turn learning pass: derive the turn, ask the model for guarded memory/skill operations, apply them through the same write paths |
 | `backgroundProvider` / `backgroundModel` | session's model | provider route and model of the background call; set both to pin them |
+| `backgroundTranscriptChars` | `12000` | How much of the session tail the pass reads; earlier turns fall out of this window |
 | `backgroundEveryTurns` | `3` | run the background pass at most once every N completed user turns, 0 = off |
 | `backgroundTimeoutMs` | `30000` | time budget of one background model call |
 | `curator` | `false` | stale-entry archiving: move an unchanged, unpinned entry out of the store into a dated archive file (never delete) |

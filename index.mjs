@@ -70,6 +70,7 @@ export const Config = Schema.object({
   backgroundReview: Schema.boolean().default(false).description('After a completed user turn, ask the host model whether the turn produced a durable memory fact or skill and apply its guarded add/patch/create/edit operations through the same write paths. It cannot delete, wake the session, or edit the transcript.'),
   backgroundProvider: Schema.string().description('Provider route of the background review call. Default: the session\'s own model.'),
   backgroundModel: Schema.string().description('Model of the background review call. Default: the session\'s own model.'),
+  backgroundTranscriptChars: Schema.number().default(12000).description('How much of the session tail the background pass reads. Earlier turns fall out of this window.'),
   backgroundEveryTurns: Schema.number().default(3).description('Run the background review at most once every N completed user turns. 0 disables it.'),
   backgroundTimeoutMs: Schema.number().default(30000).description('Time budget of one background review model call.'),
   curator: Schema.boolean().default(false).description('Stale-entry archiving: an entry whose text has not changed for curatorStaleDays is moved out of the store into a dated archive file once the store reaches curatorTriggerShare of its limit. It never deletes and never touches a pinned entry.'),
@@ -235,7 +236,7 @@ function installBackgroundReview(ctx, rt) {
     const stores = await resolveStores(rt.paths, rt.limits)
     void runBackgroundReview(rt, {
       session,
-      transcript: turnTranscript,
+      transcript: session => turnTranscript(session, rt.config.backgroundTranscriptChars ?? 12000),
       current: async () => ({
         memory: parseEntries((await readDocument(stores.memory.locations)).text).join('\n'),
         skills: await skillNames(rt, session.header?.cwd ?? process.cwd()),
