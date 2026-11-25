@@ -1104,7 +1104,7 @@ test('notice: applied operations become Hermes-style lines, and delivery happens
   await queueNotice(rt, 'Skill create: x-skill')
   const pending = await drainNotices(rt)
   assert.equal(pending.length, 2)
-  assert.match(noticeText(pending), /^Self-evolve changed something since the last turn:\n- Memory updated\n- Skill create: x-skill$/)
+  assert.match(noticeText(pending), /^⚙️ self-evolve · writes since the last turn \(not from you\):\n- Memory updated\n- Skill create: x-skill$/)
 
   await queueNotice(rt, 'Memory updated')
   const handler = preStep((() => {
