@@ -166,6 +166,7 @@ last output line is reported in the tool result as `mirror.summary`.
 | `skillCuratorScanLimit` | `20` | rows the `scan` action returns; the total is always reported |
 | `skillCuratorBatch` | `10` | most skills one run may archive, so a single call never sweeps the library |
 | `skillCuratorConsolidate` | `false` | opt-in LLM consolidation: fold overlapping managed skills into one umbrella, archive the sources |
+| `skillCuratorProvider` / `skillCuratorModel` | — / — | route for consolidation; falls back to `condenseProvider`/`condenseModel`, then to the session's own model |
 | `skillNudgeEveryTurns` | `10` | every N user turns, one notice asking whether a reusable procedure belongs in a skill |
 | `memoryEnabled`, `userProfileEnabled`, `skillsEnabled`, `personaEnabled` | `true` | tool / target switches |
 | `skillsProjectDir` | `.agents/skills` | where `scope: project` creates skills |

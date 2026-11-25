@@ -34,7 +34,7 @@ import { condenseRoute, condenseWithLlm } from './lib/condense.mjs'
 import { readText } from './lib/fsx.mjs'
 import { isTrustedOrigin, sendJson } from './lib/http.mjs'
 import { installReview, installSkillNudge, reviewDue, usageRows } from './lib/review.mjs'
-import { applyConsolidation, consolidateSkills, curatorDue, loadSkillState, runSkillCurator, saveSkillState, scanSkills, DEFAULT_INTERVAL_HOURS, DEFAULT_MIN_IDLE_HOURS } from './lib/skillcurator.mjs'
+import { applyConsolidation, consolidateSkills, consolidationRoute, curatorDue, loadSkillState, runSkillCurator, saveSkillState, scanSkills, DEFAULT_INTERVAL_HOURS, DEFAULT_MIN_IDLE_HOURS } from './lib/skillcurator.mjs'
 import { discoverSkills } from './lib/skillcurator.mjs'
 import { skillRoots } from './lib/skills.mjs'
 import { resolvePaths, resolveStores } from './lib/stores.mjs'
@@ -81,6 +81,8 @@ export const Config = Schema.object({
   skillCuratorIntervalHours: Schema.number().default(168).description('Hermes parity: a scheduled run waits this many hours between runs (default 7 days).'),
   skillCuratorMinIdleHours: Schema.number().default(2).description('Hermes parity: a scheduled run waits until the agent has been idle this many hours.'),
   skillCuratorScanLimit: Schema.number().default(20).description('Rows `skill_manage {action:"scan"}` returns; the total is always reported.'),
+  skillCuratorProvider: Schema.string().description('Provider for the opt-in consolidation pass; falls back to condenseProvider, then to the session route.'),
+  skillCuratorModel: Schema.string().description('Model for the opt-in consolidation pass; falls back to condenseModel, then to the session route.'),
   skillCuratorConsolidate: Schema.boolean().default(false).description('Hermes parity, OFF by default: the scheduled pass also asks the model to fold overlapping managed skills into one umbrella. Needs condenseProvider/condenseModel.'),
   skillNudgeEveryTurns: Schema.number().default(10).description('Every N user turns, add one step-local notice asking whether this session produced a reusable procedure worth a skill. 0 disables it.'),
   memoryEnabled: Schema.boolean().default(true).description('Expose the memory target.'),
@@ -291,7 +293,7 @@ function installSkillCuratorScheduler(ctx, rt) {
         await runSkillCurator(rt, { cwd, now })
         if (rt.config.skillCuratorConsolidate === true) {
           const llm = ctx.get('llm')
-          const route = { provider: rt.config.condenseProvider, model: rt.config.condenseModel }
+          const route = consolidationRoute(rt.config, session)
           const proposals = await consolidateSkills(rt, { llm, route, cwd })
           for (const proposal of proposals.consolidated ?? []) await applyConsolidation(rt, { ...proposal, cwd })
         }
