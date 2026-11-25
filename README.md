@@ -88,11 +88,16 @@ fork, and archive instead of delete.
   agent has been idle for `skillCuratorMinIdleHours` (2 h). The first
   observation only seeds the clock, so an install never mutates the library on
   its first tick; `pause` / `resume` (alone) stop and restart it.
-- **Never delete, only archive.** An unpinned skill unchanged for
-  `curatorStaleDays` (14) is **moved** into
+- **Three states, never delete.** Hermes' `active → stale → archived`: an
+  unpinned skill unchanged for `curatorStaleDays` (14) is only **marked** stale
+  in the state file — the file does not move, and any write or pin revives it.
+  At `curatorDeepDays` (30) it is **moved** into
   `~/.dsh/self-evolve/archive/skills/<date>/` and named in that tree's
-  `INDEX.md`; `curatorDeepDays` (30) sends it to `deep-<name>`. A restore is one
-  move back. One run archives at most `skillCuratorBatch` (10).
+  `INDEX.md`; a restore is one move back. One run archives at most
+  `skillCuratorBatch` (10).
+- **Every run leaves a report** in `~/.dsh/self-evolve/reports/<date>.md`:
+  trigger, duration, what was marked, revived and archived, with paths — and
+  `health` exposes `lastRunSummary` / `lastReportPath`.
 - **Consolidation is opt-in** (`skillCuratorConsolidate: false`): the scheduled
   pass asks the configured `condenseProvider`/`condenseModel` to fold
   overlapping managed skills into one umbrella, then archives the sources. The

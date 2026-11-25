@@ -968,9 +968,9 @@ async function seedSkill(rt, name, { ageDays = 0, pinned = false, managed = fals
   return dir
 }
 
-test('skill curator: only managed skills are candidates, archiving moves and never deletes', async () => {
+test('skill curator: managed-only, then active → stale → archived, never deleted', async () => {
   const rt = isolatedRt('skills-a', { skillCurator: true })
-  const stale = await seedSkill(rt, 'old-skill', { ageDays: 20, managed: true })
+  const oldSkill = await seedSkill(rt, 'old-skill', { ageDays: 20, managed: true })
   const fresh = await seedSkill(rt, 'new-skill', { managed: true })
   const foreign = await seedSkill(rt, 'reference-skill', { ageDays: 90 })
 
@@ -979,24 +979,40 @@ test('skill curator: only managed skills are candidates, archiving moves and nev
   assert.equal(scan.managed, 2, 'a skill the agent never wrote is not managed')
   assert.equal(scan.unmanaged_ignored, 1, 'the shared hub is reported, never touched')
   assert.deepEqual(scan.stale.map(row => row.name), ['old-skill'])
+  assert.equal(scan.archivable_total, 0, '20 days is stale, not yet archivable')
 
+  // First pass only marks: the file stays exactly where it is.
+  const marked = await runSkillCurator(rt, { force: true })
+  assert.equal(marked.reason, 'marked_stale')
+  assert.deepEqual(marked.marked_stale, [{ name: 'old-skill', age_days: 20 }])
+  assert.equal(marked.archived.length, 0)
+  assert.ok((await readFile(path.join(oldSkill, 'SKILL.md'), 'utf8')).includes('old-skill'), 'a stale marker never moves a file')
+
+  // Editing it revives it: the marker is a marker, not a punishment.
+  const now = new Date()
+  await utimes(path.join(oldSkill, 'SKILL.md'), now, now)
+  const revived = await runSkillCurator(rt, { force: true })
+  assert.deepEqual(revived.revived, ['old-skill'])
+  assert.equal((await loadSkillState(rt)).entries['old-skill'].state, 'active')
+
+  // Past the archive age it is moved, and the file is recoverable.
+  const old = new Date(Date.now() - 40 * DAY)
+  await utimes(path.join(oldSkill, 'SKILL.md'), old, old)
   const report = await runSkillCurator(rt, { force: true })
-  assert.equal(report.success, true)
+  assert.equal(report.reason, 'archived')
   assert.equal(report.archived.length, 1)
-  assert.equal(report.archived[0].name, 'old-skill')
-  await assert.rejects(readFile(path.join(stale, 'SKILL.md')), 'the skill left its root')
+  await assert.rejects(readFile(path.join(oldSkill, 'SKILL.md')), 'the skill left its root')
   assert.ok((await readFile(path.join(fresh, 'SKILL.md'), 'utf8')).includes('new-skill'), 'the fresh skill stayed')
   assert.ok((await readFile(path.join(foreign, 'SKILL.md'), 'utf8')).includes('reference-skill'), 'the unmanaged skill is untouched even at 90 days')
-  const archived = await readFile(path.join(report.archive, 'old-skill', 'SKILL.md'), 'utf8')
-  assert.match(archived, /name: old-skill/, 'the file is recoverable in the archive')
-  assert.match(await readFile(report.manifest, 'utf8'), /stale 20d · old-skill/)
-  assert.equal((await discoverSkills(rt)).length, 2)
+  assert.match(await readFile(path.join(report.archive, 'old-skill', 'SKILL.md'), 'utf8'), /name: old-skill/)
+  assert.match(await readFile(report.manifest, 'utf8'), /stale 40d · old-skill/)
 
-  // Editing a managed skill resets its clock.
-  const when = new Date()
-  await utimes(path.join(fresh, 'SKILL.md'), when, when)
-  const again = await runSkillCurator(rt, { force: true })
-  assert.equal(again.reason, 'nothing_stale')
+  // Every run leaves an audit report.
+  const reportFile = await readFile(report.report, 'utf8')
+  assert.match(reportFile, /· curate · \d+ms/)
+  assert.match(reportFile, /archived old-skill \(stale 40d\)/)
+  assert.match(reportFile, /revived old-skill/)
+  assert.equal((await loadSkillState(rt)).last_report_path, report.report)
 })
 
 test('skill curator: pin bypasses archiving, unpin releases it, scan changes nothing', async () => {
@@ -1014,9 +1030,8 @@ test('skill curator: pin bypasses archiving, unpin releases it, scan changes not
 
   await setSkillPin(rt, { name: 'kept-skill', pinned: false })
   const second = await runSkillCurator(rt, { force: true })
-  assert.equal(second.archived.length, 1)
-  assert.equal(second.archived[0].deep, true, 'past the deep age it lands in the deep archive')
-  assert.match(second.archived[0].to, /deep-kept-skill/)
+  assert.equal(second.archived.length, 1, 'unpinned, past the archive age')
+  assert.match(second.archived[0].to, /kept-skill/)
 })
 
 test('skill curator: the scheduler seeds one interval, honours idle and pause, and one run is capped', async () => {
