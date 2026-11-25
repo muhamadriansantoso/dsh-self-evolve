@@ -260,10 +260,14 @@ function installSkillCuratorScheduler(ctx, rt) {
   ctx.on('session/event', (session, event) => {
     if (event?.type === 'turn/end' && (session.header?.delegationDepth ?? 0) === 0) lastActivity = Date.now()
   })
-  ctx.on('agent/pre-step', async (session, next) => {
+  ctx.on('agent/pre-step', async (payload, next) => {
     const decision = await next()
-    const step = session?.header?.step ?? 1
-    if (step !== 1 || running || (session.header?.delegationDepth ?? 0) > 0) return decision
+    if (decision?.kind === 'reject') return decision
+    const { agent, step, signal } = payload ?? {}
+    const session = agent?.session
+    if (session === undefined || step !== 1) return decision
+    if (running || (session.header?.delegationDepth ?? 0) > 0) return decision
+    if (signal?.aborted === true) return decision
     if (Array.isArray(decision?.messages) && decision.messages.length === 0) return decision
     const now = Date.now()
     const state = await loadSkillState(rt)
@@ -280,7 +284,7 @@ function installSkillCuratorScheduler(ctx, rt) {
     const cwd = session.header?.cwd ?? process.cwd()
     void (async () => {
       try {
-        if (rt.config.skillCuratorMaxSkills > 0) {
+        if ((rt.config.skillCuratorMaxSkills ?? 0) > 0) {
           const scan = await scanSkills(rt, { cwd })
           if (scan.managed <= rt.config.skillCuratorMaxSkills) return
         }
